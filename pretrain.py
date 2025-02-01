@@ -45,8 +45,6 @@ def main():
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
     parser.add_argument("--hue_jitter", default=0.1, type=float)
-    parser.add_argument("--gaussian_blur", default=0.0, type=float)
-    parser.add_argument("--gaussian_noise", default=0.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
     parser.add_argument("--num_epochs", default=400, type=int)
