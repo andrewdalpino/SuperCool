@@ -13,7 +13,12 @@ from torch.amp import autocast
 from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.utils.tensorboard import SummaryWriter
 
-from torchvision.transforms.v2 import Compose, RandomResizedCrop, RandomHorizontalFlip
+from torchvision.transforms.v2 import (
+    Compose,
+    RandomResizedCrop,
+    RandomHorizontalFlip,
+    ColorJitter,
+)
 
 from torchmetrics.image import (
     PeakSignalNoiseRatio,
@@ -35,9 +40,15 @@ def main():
     parser.add_argument("--test_images_path", default="./dataset/test", type=str)
     parser.add_argument("--num_dataset_processes", default=4, type=int)
     parser.add_argument("--target_resolution", default=256, type=int)
-    parser.add_argument("--upscale_ratio", default=4, choices=(2, 4, 8), type=int)
-    parser.add_argument("--batch_size", default=32, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=4, type=int)
+    parser.add_argument("--upscale_ratio", default=2, choices=(2, 4, 8), type=int)
+    parser.add_argument("--brightness_jitter", default=0.1, type=float)
+    parser.add_argument("--contrast_jitter", default=0.1, type=float)
+    parser.add_argument("--saturation_jitter", default=0.1, type=float)
+    parser.add_argument("--hue_jitter", default=0.1, type=float)
+    parser.add_argument("--gaussian_blur", default=0.0, type=float)
+    parser.add_argument("--gaussian_noise", default=0.0, type=float)
+    parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
     parser.add_argument("--num_epochs", default=400, type=int)
     parser.add_argument("--learning_rate", default=1e-2, type=float)
     parser.add_argument("--rms_decay", default=-0.8, type=float)
@@ -105,9 +116,15 @@ def main():
 
     logger = SummaryWriter(args.run_dir_path)
 
-    transformer = Compose(
+    pre_transformer = Compose(
         [
             RandomResizedCrop(args.target_resolution),
+            ColorJitter(
+                brightness=args.brightness_jitter,
+                contrast=args.contrast_jitter,
+                saturation=args.saturation_jitter,
+                hue=args.hue_jitter,
+            ),
             RandomHorizontalFlip(),
         ]
     )
@@ -116,13 +133,12 @@ def main():
         root_path=args.train_images_path,
         upscale_ratio=args.upscale_ratio,
         target_resolution=args.target_resolution,
-        transformer=transformer,
+        pre_transformer=pre_transformer,
     )
     testing = ImageFolder(
         root_path=args.test_images_path,
         upscale_ratio=args.upscale_ratio,
         target_resolution=args.target_resolution,
-        transformer=None,
     )
 
     train_loader = DataLoader(

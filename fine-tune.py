@@ -5,14 +5,19 @@ from argparse import ArgumentParser
 import torch
 
 from torch.utils.data import DataLoader
-from torch.nn import MSELoss
+from torch.nn import MSELoss, BCEWithLogitsLoss
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adafactor
 from torch.amp import autocast
 from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.utils.tensorboard import SummaryWriter
 
-from torchvision.transforms.v2 import Compose, RandomResizedCrop, RandomHorizontalFlip
+from torchvision.transforms.v2 import (
+    Compose,
+    RandomResizedCrop,
+    RandomHorizontalFlip,
+    ColorJitter,
+)
 
 from torchmetrics.image import (
     PeakSignalNoiseRatio,
@@ -22,7 +27,6 @@ from torchmetrics.image import (
 
 from data import ImageFolder
 from model import SuperCool, Bouncer
-from loss import WassersteinLoss
 
 from tqdm import tqdm
 
@@ -37,6 +41,10 @@ def main():
     parser.add_argument("--test_images_path", default="./dataset/test", type=str)
     parser.add_argument("--num_dataset_processes", default=4, type=int)
     parser.add_argument("--target_resolution", default=256, type=int)
+    parser.add_argument("--brightness_jitter", default=0.1, type=float)
+    parser.add_argument("--contrast_jitter", default=0.1, type=float)
+    parser.add_argument("--saturation_jitter", default=0.1, type=float)
+    parser.add_argument("--hue_jitter", default=0.1, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
     parser.add_argument("--critic_warmup_epochs", default=3, type=int)
@@ -101,9 +109,15 @@ def main():
 
     model_args = checkpoint["model_args"]
 
-    transformer = Compose(
+    pre_transformer = Compose(
         [
             RandomResizedCrop(args.target_resolution),
+            ColorJitter(
+                brightness=args.brightness_jitter,
+                contrast=args.contrast_jitter,
+                saturation=args.saturation_jitter,
+                hue=args.hue_jitter,
+            ),
             RandomHorizontalFlip(),
         ]
     )
@@ -112,13 +126,12 @@ def main():
         root_path=args.train_images_path,
         upscale_ratio=model_args["upscale_ratio"],
         target_resolution=args.target_resolution,
-        transformer=transformer,
+        pre_transformer=pre_transformer,
     )
     testing = ImageFolder(
         root_path=args.test_images_path,
         upscale_ratio=model_args["upscale_ratio"],
         target_resolution=args.target_resolution,
-        transformer=None,
     )
 
     train_loader = DataLoader(
@@ -156,7 +169,7 @@ def main():
     critic = critic.to(args.device)
 
     l2_loss_function = MSELoss()
-    wasserstein_loss_function = WassersteinLoss()
+    bce_loss_function = BCEWithLogitsLoss()
 
     upscaler_optimizer = Adafactor(
         upscaler.parameters(),
@@ -204,7 +217,7 @@ def main():
     critic.train()
 
     for epoch in range(starting_epoch, args.num_epochs + 1):
-        total_l2_loss, total_u_wasserstein, total_c_loss = 0.0, 0.0, 0.0
+        total_l2_loss, total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
         total_u_gradient_norm, total_c_gradient_norm = 0.0, 0.0
         total_batches, total_steps = 0, 0
 
@@ -214,8 +227,8 @@ def main():
             x = x.to(args.device, non_blocking=True)
             y = y.to(args.device, non_blocking=True)
 
-            real_labels = torch.full((y.size(0), 1), 1).to(args.device)
-            fake_labels = torch.full((y.size(0), 1), -1).to(args.device)
+            real_labels = torch.full((y.size(0), 1), 1.0).to(args.device)
+            fake_labels = torch.full((y.size(0), 1), 0.0).to(args.device)
 
             with amp_context:
                 u_pred = upscaler(x)
@@ -226,7 +239,9 @@ def main():
                 c_pred = torch.cat((c_pred_real, c_pred_fake))
                 labels = torch.cat((real_labels, fake_labels))
 
-                c_loss = wasserstein_loss_function(c_pred, labels)
+                c_bce_loss = bce_loss_function(c_pred, labels)
+
+                c_loss = c_bce_loss
 
             c_loss.backward()
 
@@ -240,7 +255,7 @@ def main():
                 total_c_gradient_norm += norm.item()
                 total_steps += 1
 
-            total_c_loss += c_loss.item()
+            total_c_bce_loss += c_bce_loss.item()
 
             if epoch > args.critic_warmup_epochs:
                 with amp_context:
@@ -248,12 +263,9 @@ def main():
 
                     c_pred = critic(u_pred)
 
-                    wasserstein_loss = wasserstein_loss_function(c_pred, real_labels)
+                    u_bce_loss = bce_loss_function(c_pred, real_labels)
 
-                    u_loss = (
-                        l2_loss / l2_loss.item()
-                        + wasserstein_loss / wasserstein_loss.item()
-                    )
+                    u_loss = l2_loss / l2_loss.item() + u_bce_loss / u_bce_loss.item()
 
                 u_loss.backward()
 
@@ -267,7 +279,7 @@ def main():
                     total_u_gradient_norm += norm.item()
 
                 total_l2_loss += l2_loss.item()
-                total_u_wasserstein += wasserstein_loss.item()
+                total_u_bce_loss += u_bce_loss.item()
 
             if update_this_step:
                 upscaler_optimizer.zero_grad(set_to_none=True)
@@ -276,24 +288,24 @@ def main():
             total_batches += 1
 
         average_l2_loss = total_l2_loss / total_batches
-        average_u_wasserstein = total_u_wasserstein / total_batches
-        average_c_loss = total_c_loss / total_batches
+        average_u_bce_loss = total_u_bce_loss / total_batches
+        average_c_bce_loss = total_c_bce_loss / total_batches
 
         average_u_gradient_norm = total_u_gradient_norm / total_steps
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
         logger.add_scalar("L2 Loss", average_l2_loss, epoch)
-        logger.add_scalar("Wasserstein", average_u_wasserstein, epoch)
+        logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
         logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
-        logger.add_scalar("Critic Loss", average_c_loss, epoch)
+        logger.add_scalar("Critic Loss", average_c_bce_loss, epoch)
         logger.add_scalar("Critic Norm", average_c_gradient_norm, epoch)
 
         print(
             f"Epoch {epoch}:",
             f"L2 Loss: {average_l2_loss:.5},",
-            f"Wasserstein: {average_u_wasserstein:.5},",
+            f"BCE Loss: {average_u_bce_loss:.5},",
             f"Gradient Norm: {average_u_gradient_norm:.4},",
-            f"Critic Loss: {average_c_loss:.5},",
+            f"Critic Loss: {average_c_bce_loss:.5},",
             f"Critic Norm: {average_c_gradient_norm:.4}",
         )
 

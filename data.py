@@ -25,7 +25,7 @@ class ImageFolder(Dataset):
         root_path: str,
         upscale_ratio: int,
         target_resolution: int,
-        transformer: Transform | None,
+        pre_transformer: Transform | None = None,
     ):
         if upscale_ratio not in (2, 4, 8):
             raise ValueError(
@@ -61,7 +61,7 @@ class ImageFolder(Dataset):
         )
 
         self.image_paths = image_paths
-        self.transformer = transformer
+        self.pre_transformer = pre_transformer
         self.input_transformer = input_transformer
         self.target_transformer = target_transformer
 
@@ -76,8 +76,8 @@ class ImageFolder(Dataset):
 
         image = decode_image(image_path, mode=self.IMAGE_MODE)
 
-        if self.transformer:
-            image = self.transformer(image)
+        if self.pre_transformer:
+            image = self.pre_transformer(image)
 
         x = self.input_transformer(image)
         y = self.target_transformer(image)

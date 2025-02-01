@@ -29,4 +29,4 @@ class WassersteinLoss(nn.Module):
         super().__init__()
 
     def forward(self, y_pred, y):
-        return torch.mean(y_pred * y)
+        return -torch.mean(y_pred * y)
