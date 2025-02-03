@@ -10,10 +10,10 @@ from torch.nn import (
     Sigmoid,
     Upsample,
     PixelShuffle,
-    InstanceNorm2d,
+    BatchNorm2d,
     SiLU,
     MaxPool2d,
-    AvgPool2d,
+    AdaptiveAvgPool2d,
     Identity,
     Flatten,
     Linear,
@@ -166,43 +166,46 @@ class Swish(Module):
 class Bouncer(Module):
     """A residual-style discriminator network for adversarial training."""
 
-    def __init__(self, target_resolution: int):
+    def __init__(self):
         super().__init__()
 
         self.input = Sequential(
-            Conv2d(3, 64, kernel_size=7, stride=2, padding=1),
-            InstanceNorm2d(64),
+            Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
+            BatchNorm2d(64),
             SiLU(),
-            MaxPool2d(3, 2),
+            MaxPool2d(3, stride=2, padding=1),
         )
 
-        self.detector = ModuleList(
-            [
-                DetectorBlock(64, 64),
-                DetectorBlock(64, 64),
-                DetectorBlock(64, 64),
-                DetectorBlock(64, 128, stride=2),
-                DetectorBlock(128, 128),
-                DetectorBlock(128, 128),
-                DetectorBlock(128, 128),
-                DetectorBlock(128, 256, stride=2),
-                DetectorBlock(256, 256),
-                DetectorBlock(256, 256),
-                DetectorBlock(256, 256),
-                DetectorBlock(256, 256),
-                DetectorBlock(256, 256),
-                DetectorBlock(256, 512, stride=2),
-                DetectorBlock(512, 512),
-                DetectorBlock(512, 512),
-                AvgPool2d(2, 2),
-            ]
+        self.detector = Sequential(
+            DetectorBlock(64, 64, 256),
+            DetectorBlock(256, 64, 256),
+            DetectorBlock(256, 64, 256),
+            DetectorBlock(256, 128, 512, stride=2),
+            DetectorBlock(512, 128, 512),
+            DetectorBlock(512, 128, 512),
+            DetectorBlock(512, 128, 512),
+            DetectorBlock(512, 256, 1024, stride=2),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 256, 1024),
+            DetectorBlock(1024, 512, 2048, stride=2),
+            DetectorBlock(2048, 512, 2048),
+            DetectorBlock(2048, 512, 2048),
         )
 
-        self.flatten = Flatten()
+        self.pool = AdaptiveAvgPool2d(1)
 
-        in_features = 512 * (target_resolution // 2**6) ** 2
+        self.flatten = Flatten(start_dim=1)
 
-        self.linear = Linear(in_features, 1)
+        self.linear = Linear(2048, 1)
 
     @property
     def num_trainable_params(self) -> int:
@@ -211,9 +214,9 @@ class Bouncer(Module):
     def forward(self, x: Tensor) -> Tensor:
         x = self.input(x)
 
-        for layer in self.detector:
-            x = layer(x)
+        x = self.detector(x)
 
+        x = self.pool(x)
         x = self.flatten(x)
         x = self.linear(x)
 
@@ -221,39 +224,53 @@ class Bouncer(Module):
 
 
 class DetectorBlock(Module):
-    """A residual block with 3x3 convolutions and instance normalization."""
+    """A residual bottleneck block with 3x3 convolutions and batch normalization."""
 
-    def __init__(self, channels_in: int, channels_out: int, stride: int = 1):
+    def __init__(
+        self, channels_in: int, hidden_channels: int, channels_out: int, stride: int = 1
+    ):
         super().__init__()
 
         self.residual = Sequential(
             Conv2d(
                 in_channels=channels_in,
-                out_channels=channels_out,
-                kernel_size=3,
-                stride=stride,
-                padding=1,
+                out_channels=hidden_channels,
+                kernel_size=1,
+                bias=False,
             ),
-            InstanceNorm2d(channels_out),
+            BatchNorm2d(hidden_channels),
             SiLU(),
             Conv2d(
-                in_channels=channels_out,
-                out_channels=channels_out,
-                kernel_size=3,
-                padding=1,
-            ),
-            InstanceNorm2d(channels_out),
-        )
-
-        if stride == 1 and channels_in == channels_out:
-            skip = Identity()
-        else:
-            skip = Conv2d(
-                in_channels=channels_in,
-                out_channels=channels_out,
+                in_channels=hidden_channels,
+                out_channels=hidden_channels,
                 kernel_size=3,
                 stride=stride,
                 padding=1,
+                bias=False,
+            ),
+            BatchNorm2d(hidden_channels),
+            SiLU(),
+            Conv2d(
+                in_channels=hidden_channels,
+                out_channels=channels_out,
+                kernel_size=1,
+                bias=False,
+            ),
+            BatchNorm2d(channels_out),
+        )
+
+        if channels_in == channels_out:
+            skip = Sequential(Identity())
+        else:
+            skip = Sequential(
+                Conv2d(
+                    in_channels=channels_in,
+                    out_channels=channels_out,
+                    kernel_size=1,
+                    stride=stride,
+                    bias=False,
+                ),
+                BatchNorm2d(channels_out),
             )
 
         self.skip = skip

@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 import torch
 
 from torch.utils.data import DataLoader
-from torch.nn import MSELoss, BCEWithLogitsLoss
+from torch.nn import BCEWithLogitsLoss
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adafactor
 from torch.amp import autocast
@@ -45,14 +45,14 @@ def main():
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
     parser.add_argument("--hue_jitter", default=0.1, type=float)
-    parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
+    parser.add_argument("--batch_size", default=8, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
     parser.add_argument("--critic_warmup_epochs", default=3, type=int)
     parser.add_argument("--num_epochs", default=100, type=int)
     parser.add_argument("--learning_rate", default=1e-2, type=float)
     parser.add_argument("--rms_decay", default=-0.8, type=float)
     parser.add_argument("--low_memory_optimizer", action="store_true")
-    parser.add_argument("--max_gradient_norm", default=100.0, type=float)
+    parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--eval_interval", default=10, type=int)
     parser.add_argument("--checkpoint_interval", default=10, type=int)
     parser.add_argument(
@@ -112,13 +112,13 @@ def main():
     pre_transformer = Compose(
         [
             RandomResizedCrop(args.target_resolution),
+            RandomHorizontalFlip(),
             ColorJitter(
                 brightness=args.brightness_jitter,
                 contrast=args.contrast_jitter,
                 saturation=args.saturation_jitter,
                 hue=args.hue_jitter,
             ),
-            RandomHorizontalFlip(),
         ]
     )
 
@@ -157,9 +157,7 @@ def main():
 
     print("Model checkpoint loaded")
 
-    critic_args = {
-        "target_resolution": args.target_resolution,
-    }
+    critic_args = {}
 
     critic = Bouncer(**critic_args)
 
@@ -168,7 +166,6 @@ def main():
     upscaler = upscaler.to(args.device)
     critic = critic.to(args.device)
 
-    l2_loss_function = MSELoss()
     bce_loss_function = BCEWithLogitsLoss()
 
     upscaler_optimizer = Adafactor(
@@ -177,7 +174,6 @@ def main():
         beta2_decay=args.rms_decay,
         foreach=not args.low_memory_optimizer,
     )
-
     critic_optimizer = Adafactor(
         critic.parameters(),
         lr=args.learning_rate,
@@ -217,7 +213,7 @@ def main():
     critic.train()
 
     for epoch in range(starting_epoch, args.num_epochs + 1):
-        total_l2_loss, total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
+        total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
         total_u_gradient_norm, total_c_gradient_norm = 0.0, 0.0
         total_batches, total_steps = 0, 0
 
@@ -227,8 +223,8 @@ def main():
             x = x.to(args.device, non_blocking=True)
             y = y.to(args.device, non_blocking=True)
 
-            real_labels = torch.full((y.size(0), 1), 1.0).to(args.device)
-            fake_labels = torch.full((y.size(0), 1), 0.0).to(args.device)
+            real_labels = torch.full((x.size(0), 1), 1.0).to(args.device)
+            fake_labels = torch.full((x.size(0), 1), 0.0).to(args.device)
 
             with amp_context:
                 u_pred = upscaler(x)
@@ -236,14 +232,14 @@ def main():
                 c_pred_real = critic(y)
                 c_pred_fake = critic(u_pred.detach())
 
-                c_pred = torch.cat((c_pred_real, c_pred_fake))
-                labels = torch.cat((real_labels, fake_labels))
+                c_pred = torch.cat((c_pred_real, c_pred_fake), dim=0)
+                labels = torch.cat((real_labels, fake_labels), dim=0)
 
                 c_bce_loss = bce_loss_function(c_pred, labels)
 
-                c_loss = c_bce_loss
+                c_bce_loss /= args.gradient_accumulation_steps
 
-            c_loss.backward()
+            c_bce_loss.backward()
 
             update_this_step = step % args.gradient_accumulation_steps == 0
 
@@ -252,6 +248,8 @@ def main():
 
                 critic_optimizer.step()
 
+                critic_optimizer.zero_grad()
+
                 total_c_gradient_norm += norm.item()
                 total_steps += 1
 
@@ -259,15 +257,13 @@ def main():
 
             if epoch > args.critic_warmup_epochs:
                 with amp_context:
-                    l2_loss = l2_loss_function(u_pred, y)
-
                     c_pred = critic(u_pred)
 
                     u_bce_loss = bce_loss_function(c_pred, real_labels)
 
-                    u_loss = l2_loss / l2_loss.item() + u_bce_loss / u_bce_loss.item()
+                    u_bce_loss /= args.gradient_accumulation_steps
 
-                u_loss.backward()
+                u_bce_loss.backward()
 
                 if update_this_step:
                     norm = clip_grad_norm_(
@@ -278,7 +274,6 @@ def main():
 
                     total_u_gradient_norm += norm.item()
 
-                total_l2_loss += l2_loss.item()
                 total_u_bce_loss += u_bce_loss.item()
 
             if update_this_step:
@@ -287,25 +282,22 @@ def main():
 
             total_batches += 1
 
-        average_l2_loss = total_l2_loss / total_batches
         average_u_bce_loss = total_u_bce_loss / total_batches
         average_c_bce_loss = total_c_bce_loss / total_batches
 
         average_u_gradient_norm = total_u_gradient_norm / total_steps
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
-        logger.add_scalar("L2 Loss", average_l2_loss, epoch)
         logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
         logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
-        logger.add_scalar("Critic Loss", average_c_bce_loss, epoch)
+        logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
         logger.add_scalar("Critic Norm", average_c_gradient_norm, epoch)
 
         print(
             f"Epoch {epoch}:",
-            f"L2 Loss: {average_l2_loss:.5},",
             f"BCE Loss: {average_u_bce_loss:.5},",
             f"Gradient Norm: {average_u_gradient_norm:.4},",
-            f"Critic Loss: {average_c_bce_loss:.5},",
+            f"Critic BCE: {average_c_bce_loss:.5},",
             f"Critic Norm: {average_c_gradient_norm:.4}",
         )
 

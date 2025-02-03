@@ -60,7 +60,7 @@ def main():
     parser.add_argument("--hidden_ratio", default=2, choices=(1, 2, 4), type=int)
     parser.add_argument("--num_layers", default=16, type=int)
     parser.add_argument("--eval_interval", default=10, type=int)
-    parser.add_argument("--checkpoint_interval", default=20, type=int)
+    parser.add_argument("--checkpoint_interval", default=10, type=int)
     parser.add_argument(
         "--checkpoint_path", default="./checkpoints/checkpoint.pt", type=str
     )
@@ -117,13 +117,13 @@ def main():
     pre_transformer = Compose(
         [
             RandomResizedCrop(args.target_resolution),
+            RandomHorizontalFlip(),
             ColorJitter(
                 brightness=args.brightness_jitter,
                 contrast=args.contrast_jitter,
                 saturation=args.saturation_jitter,
                 hue=args.hue_jitter,
             ),
-            RandomHorizontalFlip(),
         ]
     )
 
@@ -220,6 +220,8 @@ def main():
                 tv_loss = tv_loss_function(y_pred)
 
             loss = l2_loss + args.tv_penalty * tv_loss
+
+            loss /= args.gradient_accumulation_steps
 
             loss.backward()
 
