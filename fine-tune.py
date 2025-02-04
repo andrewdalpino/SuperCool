@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 import torch
 
 from torch.utils.data import DataLoader
-from torch.nn import BCEWithLogitsLoss
+from torch.nn import MSELoss, BCEWithLogitsLoss
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import Adafactor
 from torch.amp import autocast
@@ -166,6 +166,7 @@ def main():
     upscaler = upscaler.to(args.device)
     critic = critic.to(args.device)
 
+    l2_loss_function = MSELoss()
     bce_loss_function = BCEWithLogitsLoss()
 
     upscaler_optimizer = Adafactor(
@@ -213,7 +214,7 @@ def main():
     critic.train()
 
     for epoch in range(starting_epoch, args.num_epochs + 1):
-        total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
+        total_l2_loss, total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
         total_u_gradient_norm, total_c_gradient_norm = 0.0, 0.0
         total_batches, total_steps = 0, 0
 
@@ -227,9 +228,10 @@ def main():
             fake_labels = torch.full((x.size(0), 1), 0.0).to(args.device)
 
             with amp_context:
+                c_pred_real = critic(y)
+
                 u_pred = upscaler(x)
 
-                c_pred_real = critic(y)
                 c_pred_fake = critic(u_pred.detach())
 
                 c_pred = torch.cat((c_pred_real, c_pred_fake), dim=0)
@@ -237,9 +239,11 @@ def main():
 
                 c_bce_loss = bce_loss_function(c_pred, labels)
 
-                c_bce_loss /= args.gradient_accumulation_steps
+                c_loss = c_bce_loss
 
-            c_bce_loss.backward()
+                c_loss /= args.gradient_accumulation_steps
+
+            c_loss.backward()
 
             update_this_step = step % args.gradient_accumulation_steps == 0
 
@@ -257,13 +261,19 @@ def main():
 
             if epoch > args.critic_warmup_epochs:
                 with amp_context:
+                    l2_loss = l2_loss_function(u_pred, y)
+
                     c_pred = critic(u_pred)
 
                     u_bce_loss = bce_loss_function(c_pred, real_labels)
 
-                    u_bce_loss /= args.gradient_accumulation_steps
+                    u_loss = (
+                        l2_loss / l2_loss.detach() + u_bce_loss / u_bce_loss.detach()
+                    )  # Dynamically weight the losses
 
-                u_bce_loss.backward()
+                    u_loss /= args.gradient_accumulation_steps
+
+                u_loss.backward()
 
                 if update_this_step:
                     norm = clip_grad_norm_(
@@ -274,6 +284,7 @@ def main():
 
                     total_u_gradient_norm += norm.item()
 
+                total_l2_loss += l2_loss.item()
                 total_u_bce_loss += u_bce_loss.item()
 
             if update_this_step:
@@ -282,12 +293,14 @@ def main():
 
             total_batches += 1
 
+        average_l2_loss = total_l2_loss / total_batches
         average_u_bce_loss = total_u_bce_loss / total_batches
         average_c_bce_loss = total_c_bce_loss / total_batches
 
         average_u_gradient_norm = total_u_gradient_norm / total_steps
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
+        logger.add_scalar("L2 Loss", average_l2_loss, epoch)
         logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
         logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
         logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
@@ -295,6 +308,7 @@ def main():
 
         print(
             f"Epoch {epoch}:",
+            f"L2 Loss: {average_l2_loss:.5},",
             f"BCE Loss: {average_u_bce_loss:.5},",
             f"Gradient Norm: {average_u_gradient_norm:.4},",
             f"Critic BCE: {average_c_bce_loss:.5},",
