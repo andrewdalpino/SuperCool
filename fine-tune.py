@@ -27,6 +27,7 @@ from torchmetrics.image import (
 
 from data import ImageFolder
 from model import SuperCool, Bouncer
+from loss import TVLoss
 
 from tqdm import tqdm
 
@@ -51,6 +52,7 @@ def main():
     parser.add_argument("--num_epochs", default=100, type=int)
     parser.add_argument("--learning_rate", default=1e-2, type=float)
     parser.add_argument("--rms_decay", default=-0.8, type=float)
+    parser.add_argument("--tv_penalty", default=0.5, type=float)
     parser.add_argument("--low_memory_optimizer", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument(
@@ -172,6 +174,7 @@ def main():
     critic = critic.to(args.device)
 
     l2_loss_function = MSELoss()
+    tv_loss_function = TVLoss()
     bce_loss_function = BCEWithLogitsLoss()
 
     upscaler_optimizer = Adafactor(
@@ -219,7 +222,11 @@ def main():
     critic.train()
 
     for epoch in range(starting_epoch, args.num_epochs + 1):
-        total_l2_loss, total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
+        total_l2_loss, total_tv_loss = 0.0, 0.0
+        total_u_bce_loss, total_c_bce_loss = (
+            0.0,
+            0.0,
+        )
         total_u_gradient_norm, total_c_gradient_norm = 0.0, 0.0
         total_batches, total_steps = 0, 0
 
@@ -267,6 +274,7 @@ def main():
             if epoch > args.critic_warmup_epochs:
                 with amp_context:
                     l2_loss = l2_loss_function(u_pred, y)
+                    tv_loss = tv_loss_function(u_pred)
 
                     c_pred = critic(u_pred)
 
@@ -275,6 +283,8 @@ def main():
                     u_loss = (
                         l2_loss / l2_loss.detach() + u_bce_loss / u_bce_loss.detach()
                     )  # Dynamically weight the losses
+
+                    u_loss += args.tv_penalty * tv_loss
 
                     u_loss /= args.gradient_accumulation_steps
 
@@ -290,6 +300,7 @@ def main():
                     total_u_gradient_norm += norm.item()
 
                 total_l2_loss += l2_loss.item()
+                total_tv_loss += tv_loss.item()
                 total_u_bce_loss += u_bce_loss.item()
 
             if update_this_step:
@@ -299,6 +310,7 @@ def main():
             total_batches += 1
 
         average_l2_loss = total_l2_loss / total_batches
+        average_tv_loss = total_tv_loss / total_batches
         average_u_bce_loss = total_u_bce_loss / total_batches
         average_c_bce_loss = total_c_bce_loss / total_batches
 
@@ -306,6 +318,7 @@ def main():
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
         logger.add_scalar("L2 Loss", average_l2_loss, epoch)
+        logger.add_scalar("TV Loss", average_tv_loss, epoch)
         logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
         logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
         logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
@@ -314,6 +327,7 @@ def main():
         print(
             f"Epoch {epoch}:",
             f"L2 Loss: {average_l2_loss:.5},",
+            f"TV Loss: {average_tv_loss:.5},",
             f"BCE Loss: {average_u_bce_loss:.5},",
             f"Gradient Norm: {average_u_gradient_norm:.4},",
             f"Critic BCE: {average_c_bce_loss:.5},",

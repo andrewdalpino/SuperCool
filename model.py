@@ -155,7 +155,7 @@ class Bouncer(Module):
     def __init__(self, model_size: str):
         super().__init__()
 
-        if size not in ("small", "medium", "large"):
+        if model_size not in ("small", "medium", "large"):
             raise ValueError(
                 f"Model size must be small, medium, or large, {model_size} given."
             )
