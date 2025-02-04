@@ -6,11 +6,10 @@ from torch.nn import (
     Module,
     Sequential,
     Conv2d,
-    Sigmoid,
     Upsample,
     PixelShuffle,
-    BatchNorm2d,
     SiLU,
+    BatchNorm2d,
     MaxPool2d,
     AdaptiveAvgPool2d,
     Identity,
@@ -250,17 +249,13 @@ class DetectorBlock(Module):
                 kernel_size=3,
                 stride=stride,
                 padding=1,
-                bias=False,
             ),
-            BatchNorm2d(hidden_channels),
             SiLU(),
             Conv2d(
                 in_channels=hidden_channels,
                 out_channels=channels_out,
                 kernel_size=1,
-                bias=False,
             ),
-            BatchNorm2d(channels_out),
         )
 
         if channels_in == channels_out:
@@ -273,8 +268,7 @@ class DetectorBlock(Module):
                     kernel_size=1,
                     stride=stride,
                     bias=False,
-                ),
-                BatchNorm2d(channels_out),
+                )
             )
 
         self.skip = skip
