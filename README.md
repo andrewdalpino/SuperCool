@@ -44,6 +44,12 @@ You can also adjust the `learning_rate`, `batch_size`, and `gradient_accumulatio
 python pretrain.py --batch_size=16 --learning_rate=0.01 --gradient_accumulation_steps=8
 ```
 
+In addition, you can control various data augmentation arguments such as the brightness, contrast, hue, and saturation jitter.
+
+```
+python pretrain.py --brightness_jitter=0.5 --contrast_jitter=0.4 --hue_jitter=0.3 --saturation_jitter=0.2
+```
+
 ### Training Dashboard
 
 We use [TensorBoard](https://www.tensorflow.org/tensorboard) to capture and display pretraining events such as loss and gradient norm updates. To launch the dashboard server run the following command from the terminal.
@@ -95,6 +101,12 @@ The fine-tuning stage of the model is optional but can greatly improve the visua
 python fine-tune.py
 ```
 
+You can adjust the size and strength of the critic network used for adversarial training as well as the number of warmup epochs like in the example below.
+
+```
+python fine-tune.py --critic_warmup_epochs=10 --critic_model_size="large"
+```
+
 ### Fine-tuning Arguments
 
 | Argument | Default | Type | Description |
@@ -127,7 +139,25 @@ python fine-tune.py
 
 ## Upscaling
 
-Coming soon ...
+You can use the provided `upscale.py` script to generate upscaled images from the trained model at the default checkpoint like in the example below.
+
+```
+python upscale.py --image_path="./example.jpg"
+```
+
+To generate images using a different checkpoint you can use the `checkpoint_path` argument like in the example below.
+
+```
+python upscale.py --checkpoint_path="./checkpoints/fine-tuned.pt" --image_path="./example.jpg"
+```
+
+### Upscaling Arguments
+
+| Argument | Default | Type | Description |
+|---|---|---|---|
+| --image_path | None | str | The path to the image file to be upscaled by the model. |
+| --checkpoint_path | "./checkpoints/fine-tuned.pt" | str | The path to the base checkpoint file on disk. |
+| --device | "cuda" | str | The device to run the computation on. |
 
 ## References
 
