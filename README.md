@@ -44,6 +44,16 @@ You can also adjust the `learning_rate`, `batch_size`, and `gradient_accumulatio
 python pretrain.py --batch_size=16 --learning_rate=0.01 --gradient_accumulation_steps=8
 ```
 
+### Training Dashboard
+
+We use [TensorBoard](https://www.tensorflow.org/tensorboard) to capture and display pretraining events such as loss and gradient norm updates. To launch the dashboard server run the following command from the terminal.
+
+```
+tensorboard --logdir=./runs
+```
+
+Then navigate to the dashboard using your favorite web browser.
+
 ### Pretraining Arguments
 
 | Argument | Default | Type | Description |
@@ -77,6 +87,43 @@ python pretrain.py --batch_size=16 --learning_rate=0.01 --gradient_accumulation_
 | --seed | None | int | The seed for the random number generator. |
 
 ### Fine-tuning
+
+The fine-tuning stage of the model is optional but can greatly improve the visual fidelity (VIF) of the upscaled images without impacting the peak signal-to-noise ratio (PSNR) or structural similarity (SSIM) achieved during pretraining. To fine-tune the model from the default checkpoint at `./checkpoints/checkpoint.pt` with the default arguments you can run the following command.
+
+```
+python fine-tune.py
+```
+
+### Fine-tuning Arguments
+
+| Argument | Default | Type | Description |
+| --train_images_path | "./dataset/train" | str | The path to the folder containing your training images. |
+| --test_images_path | "./dataset/test" | str | The path to the folder containing your testing images. |
+| --num_dataset_processes | 4 | int | The number of CPU processes to use to process the dataset. |
+| --target_resolution | 256 | int | The number of pixels in the height and width dimensions of the training images. |
+| --brightness_jitter | 0.1 | float | The amount of jitter applied to the brightness of the training images. |
+| --contrast_jitter | 0.1 | float | The amount of jitter applied to the contrast of the training images. |
+| --saturation_jitter | 0.1 | float | The amount of jitter applied to the saturation of the training images. |
+| --hue_jitter | 0.1 | float | The amount of jitter applied to the hue of the training images. |
+| --batch_size | 32 | int | The number of training images to pass through the network at a time. |
+| --gradient_accumulation_steps | 4 | int | The number of batches to pass through the network before updating the model weights. |
+| --critic_warmup_epochs | 3 | int | The number of epochs to train the critic model before updating the upscaler. |
+| --num_epochs | 100 | int | The number of epochs to train for. |
+| --learning_rate | 1e-2 | float | The learning rate of the Adafactor optimizer. |
+| --rms_decay | -0.8 | float | The decay rate of the RMS coefficient of the Adafactor optimizer. |
+| --tv_penalty | 0.5 | float | The strength of the total variation penalty added to the reconstruction loss. |
+| --low_memory_optimizer | False | bool | Should the optimizer reduce its memory consumption in exchange for a slightly slower runtime? |
+| --max_gradient_norm | 1.0 | float | Clip gradients above this threshold norm before stepping. |
+| --critic_model_size | "small" | ("small", "medium", "large") | The size/strength of the critic model used in adversarial training. |
+| --eval_interval | 5 | int | Evaluate the model after this many epochs on the testing set. |
+| --checkpoint_interval | 10 | int | Save the model checkpoint to disk every this many epochs. |
+| --checkpoint_path | "./checkpoints/fine-tuned.pt" | str | The path to the base checkpoint file on disk. |
+| --resume | False | bool | Should we resume training from the last checkpoint? |
+| --run_dir_path | "./runs/fine-tune" | str | The path to the TensorBoard run directory for this training session. |
+| --device | "cuda" | str | The device to run the computation on. |
+| --seed | None | int | The seed for the random number generator. |
+
+## Upscaling
 
 Coming soon ...
 
