@@ -4,7 +4,6 @@ from torch import Tensor
 
 from torch.nn import (
     Module,
-    ModuleList,
     Sequential,
     Conv2d,
     Sigmoid,
@@ -68,8 +67,8 @@ class SuperCool(Module, PyTorchModelHubMixin):
 
         self.skip = Upsample(scale_factor=upscale_ratio, mode=base_upscaler)
 
-        self.encoder = ModuleList(
-            [EncoderBlock(num_channels, hidden_ratio) for _ in range(num_layers)]
+        self.encoder = Sequential(
+            *[EncoderBlock(num_channels, hidden_ratio) for _ in range(num_layers)]
         )
 
         self.decoder = SubpixelConv2d(
@@ -84,13 +83,13 @@ class SuperCool(Module, PyTorchModelHubMixin):
 
     def forward(self, x: Tensor) -> Tensor:
         z = self.input(x)
-        s = self.skip(x)
 
-        for layer in self.encoder:
-            z = layer(z)
+        z = self.encoder(z)
 
         z = self.decoder(z)
         z = self.shuffle(z)
+
+        s = self.skip(x)
 
         z += s  # Global residual connection
 
@@ -100,7 +99,7 @@ class SuperCool(Module, PyTorchModelHubMixin):
 
 
 class EncoderBlock(Module):
-    """A low-resolution encoder block with {num_channels} feature maps and wide pre-activation."""
+    """A low-resolution encoder block with {num_channels} feature maps and wide activations."""
 
     def __init__(self, num_channels: int, hidden_ratio: int):
         super().__init__()
@@ -118,11 +117,11 @@ class EncoderBlock(Module):
         self.conv1 = weight_norm(conv1)
         self.conv2 = weight_norm(conv2)
 
-        self.swish = Swish()
+        self.silu = SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
         z = self.conv1(x)
-        z = self.swish(z)
+        z = self.silu(z)
         z = self.conv2(z)
 
         z += x  # Local residual connection
@@ -150,24 +149,30 @@ class SubpixelConv2d(Module):
         return self.conv(x)
 
 
-class Swish(Module):
-    """Swish activation function with trainable beta parameter."""
-
-    def __init__(self):
-        super().__init__()
-
-        self.beta = Parameter(torch.tensor(1.0))
-        self.sigmoid = Sigmoid()
-
-    def forward(self, x: Tensor) -> Tensor:
-        return x * self.sigmoid(self.beta * x)
-
-
 class Bouncer(Module):
     """A residual-style discriminator network for adversarial training."""
 
-    def __init__(self):
+    def __init__(self, model_size: str):
         super().__init__()
+
+        if size not in ("small", "medium", "large"):
+            raise ValueError(
+                f"Model size must be small, medium, or large, {model_size} given."
+            )
+
+        num_primary_layers = 3
+        num_quaternary_layers = 3
+
+        match model_size:
+            case "small":
+                num_secondary_layers = 4
+                num_tertiary_layers = 6
+            case "medium":
+                num_secondary_layers = 4
+                num_tertiary_layers = 23
+            case "large":
+                num_secondary_layers = 8
+                num_tertiary_layers = 36
 
         self.input = Sequential(
             Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
@@ -176,29 +181,28 @@ class Bouncer(Module):
             MaxPool2d(3, stride=2, padding=1),
         )
 
-        self.detector = Sequential(
-            DetectorBlock(64, 64, 256),
-            DetectorBlock(256, 64, 256),
-            DetectorBlock(256, 64, 256),
-            DetectorBlock(256, 128, 512, stride=2),
-            DetectorBlock(512, 128, 512),
-            DetectorBlock(512, 128, 512),
-            DetectorBlock(512, 128, 512),
-            DetectorBlock(512, 256, 1024, stride=2),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 256, 1024),
-            DetectorBlock(1024, 512, 2048, stride=2),
-            DetectorBlock(2048, 512, 2048),
-            DetectorBlock(2048, 512, 2048),
+        self.detector = Sequential(DetectorBlock(64, 64, 256))
+
+        self.detector.extend(
+            [DetectorBlock(256, 64, 256) for _ in range(num_primary_layers - 1)]
+        )
+
+        self.detector.append(DetectorBlock(256, 128, 512, stride=2))
+
+        self.detector.extend(
+            [DetectorBlock(512, 128, 512) for _ in range(num_secondary_layers - 1)]
+        )
+
+        self.detector.append(DetectorBlock(512, 256, 1024, stride=2))
+
+        self.detector.extend(
+            [DetectorBlock(512, 256, 1024) for _ in range(num_tertiary_layers - 1)]
+        )
+
+        self.detector.append(DetectorBlock(1024, 512, 2048, stride=2))
+
+        self.detector.extend(
+            [DetectorBlock(2048, 512, 2048) for _ in range(num_quaternary_layers - 1)]
         )
 
         self.pool = AdaptiveAvgPool2d(1)

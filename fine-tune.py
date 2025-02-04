@@ -53,6 +53,9 @@ def main():
     parser.add_argument("--rms_decay", default=-0.8, type=float)
     parser.add_argument("--low_memory_optimizer", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
+    parser.add_argument(
+        "--critic_model_size", default="small", choices=("small", "medium", "large")
+    )
     parser.add_argument("--eval_interval", default=10, type=int)
     parser.add_argument("--checkpoint_interval", default=10, type=int)
     parser.add_argument(
@@ -157,7 +160,9 @@ def main():
 
     print("Model checkpoint loaded")
 
-    critic_args = {}
+    critic_args = {
+        "model_size": args.critic_model_size,
+    }
 
     critic = Bouncer(**critic_args)
 
