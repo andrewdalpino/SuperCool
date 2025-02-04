@@ -33,7 +33,7 @@ from tqdm import tqdm
 
 
 def main():
-    parser = ArgumentParser(description="Training script")
+    parser = ArgumentParser(description="Generative adversarial fine-tuning script.")
 
     parser.add_argument(
         "--base_model_path", default="./checkpoints/checkpoint.pt", type=str
@@ -223,10 +223,7 @@ def main():
 
     for epoch in range(starting_epoch, args.num_epochs + 1):
         total_l2_loss, total_tv_loss = 0.0, 0.0
-        total_u_bce_loss, total_c_bce_loss = (
-            0.0,
-            0.0,
-        )
+        total_u_bce_loss, total_c_bce_loss = 0.0, 0.0
         total_u_gradient_norm, total_c_gradient_norm = 0.0, 0.0
         total_batches, total_steps = 0, 0
 
