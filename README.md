@@ -57,6 +57,7 @@ Then navigate to the dashboard using your favorite web browser.
 ### Pretraining Arguments
 
 | Argument | Default | Type | Description |
+|---|---|---|---|
 | --train_images_path | "./dataset/train" | str | The path to the folder containing your training images. |
 | --test_images_path | "./dataset/test" | str | The path to the folder containing your testing images. |
 | --num_dataset_processes | 4 | int | The number of CPU processes to use to process the dataset. |
@@ -97,6 +98,7 @@ python fine-tune.py
 ### Fine-tuning Arguments
 
 | Argument | Default | Type | Description |
+|---|---|---|---|
 | --train_images_path | "./dataset/train" | str | The path to the folder containing your training images. |
 | --test_images_path | "./dataset/test" | str | The path to the folder containing your testing images. |
 | --num_dataset_processes | 4 | int | The number of CPU processes to use to process the dataset. |
