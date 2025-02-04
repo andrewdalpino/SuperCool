@@ -15,7 +15,6 @@ from torch.nn import (
     Identity,
     Flatten,
     Linear,
-    Parameter,
 )
 
 from torch.nn.utils.parametrizations import weight_norm
