@@ -40,7 +40,7 @@ def main():
     parser.add_argument("--test_images_path", default="./dataset/test", type=str)
     parser.add_argument("--num_dataset_processes", default=4, type=int)
     parser.add_argument("--target_resolution", default=256, type=int)
-    parser.add_argument("--upscale_ratio", default=2, choices=(2, 4, 8), type=int)
+    parser.add_argument("--upscale_ratio", default=4, choices=(2, 4, 8), type=int)
     parser.add_argument("--brightness_jitter", default=0.1, type=float)
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
