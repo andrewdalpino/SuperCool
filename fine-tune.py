@@ -46,8 +46,8 @@ def main():
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
     parser.add_argument("--hue_jitter", default=0.1, type=float)
-    parser.add_argument("--batch_size", default=8, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
+    parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
     parser.add_argument("--critic_warmup_epochs", default=3, type=int)
     parser.add_argument("--num_epochs", default=100, type=int)
     parser.add_argument("--learning_rate", default=1e-2, type=float)
@@ -58,7 +58,7 @@ def main():
     parser.add_argument(
         "--critic_model_size", default="small", choices=("small", "medium", "large")
     )
-    parser.add_argument("--eval_interval", default=10, type=int)
+    parser.add_argument("--eval_interval", default=5, type=int)
     parser.add_argument("--checkpoint_interval", default=10, type=int)
     parser.add_argument(
         "--checkpoint_path", default="./checkpoints/fine-tuned.pt", type=str
@@ -315,8 +315,8 @@ def main():
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
         logger.add_scalar("L2 Loss", average_l2_loss, epoch)
-        logger.add_scalar("TV Loss", average_tv_loss, epoch)
         logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
+        logger.add_scalar("TV Loss", average_tv_loss, epoch)
         logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
         logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
         logger.add_scalar("Critic Norm", average_c_gradient_norm, epoch)
@@ -324,8 +324,8 @@ def main():
         print(
             f"Epoch {epoch}:",
             f"L2 Loss: {average_l2_loss:.5},",
-            f"TV Loss: {average_tv_loss:.5},",
             f"BCE Loss: {average_u_bce_loss:.5},",
+            f"TV Loss: {average_tv_loss:.5},",
             f"Gradient Norm: {average_u_gradient_norm:.4},",
             f"Critic BCE: {average_c_bce_loss:.5},",
             f"Critic Norm: {average_c_gradient_norm:.4}",

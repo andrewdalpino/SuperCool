@@ -195,7 +195,7 @@ class Bouncer(Module):
         self.detector.append(DetectorBlock(512, 256, 1024, stride=2))
 
         self.detector.extend(
-            [DetectorBlock(512, 256, 1024) for _ in range(num_tertiary_layers - 1)]
+            [DetectorBlock(1024, 256, 1024) for _ in range(num_tertiary_layers - 1)]
         )
 
         self.detector.append(DetectorBlock(1024, 512, 2048, stride=2))
