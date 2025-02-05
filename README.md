@@ -1,16 +1,16 @@
 # SuperCool
 
-Super Cool is a fast single-image super-resolution (SISR) model capable of upscaling images 2X, 4X, and 8X while maintaining high visual fidelity. The model is trained in two stages which optimize for different objectives. The first stage focuses on upscaling using a regularized reconstruction loss and the second stage focuses on increasing visual fidelity through generative adversarial network (GAN) training where a critic model is used to fine-tune the output of the upscaler. When combined, these objectives produces a model that outputs high-resolution images that are true to the original.
+SuperCool is a fast single-image super-resolution (SISR) model capable of upscaling images 2X, 4X, and 8X with high visual fidelity. The model is trained in two stages which optimize for different objectives. The first stage focuses on upscaling using a regularized reconstruction loss and the second stage focuses on increasing visual fidelity through generative adversarial network (GAN) training. When combined, these objectives produce models that output upscaled images that look better to the human eye than models that were not jointly optimized.
 
-## Features
+## Key Features
 
-- **High visual information fidelity**: SuperCool employs a secondary fine-tuning stage that increases the visual fidelity (VIF) of the output while minimizing visual artifacts by dynamically balancing a critic loss with regularized reconstruction loss. The result are upscaled images that are more faithful to the original image to the human eye.
+- **High visual information fidelity**: SuperCool employs a secondary fine-tuning stage that increases the visual fidelity (VIF) of the output while maintaining the peak signal-to-noise (PSNR) and structural similarity (SSIM) achieved during pretraining. The result are upscaled images that are perceived to be more appealing to the human eye.
 
-- **Very fast**: Instead of directly predicting the individual pixels of the upscaled image, SuperCool uses a fast deterministic bilinear or bicubic upscaling algorithm and then fills in the missing details through a residual pathway that operates purely within the low-resolution space. As such, the model is capable of being used for real-time image processing even at 8X the original size.
+- **Very fast**: Instead of directly predicting the individual pixels of the upscaled image, SuperCool uses a fast deterministic  upscaling algorithm and then fills in the missing details through a residual pathway that operates primarily within the low-resolution subspace. As such, the model is capable of being used for real-time image processing.
 
-- **Adjustable model size**: Depending on your computing budget, you can train larger or smaller models by adjusting a few hyper-parameters such as the number of hidden channels, number of hidden layers, and size/strength of the adversarial model.
+- **Train on your own images**: SuperCool's dataloader and preprocessing pipeline works with any of the popular image formats including JPEG, PNG, WEBP, and GIF. Just point the training script to the location of the folder containing your training images and begin training. This enabled you to build upscalers that specialize on certain types of images such as satellite photos or portraits.
 
-- **Train on your own images**: SuperCool's dataloader works with any training images. All you have to do is point the training script to the location of the folder containing your images. This allows you to train specialized upscalers that operate on specific types of images such as satellite photos or portraits.
+- **Adjustable model size**: Depending on your computing and memory budget, you can train larger or smaller models by adjusting a few hyper-parameters such as the number of hidden channels, number of hidden layers, and size/strength of the adversarial model.
 
 ## Install Project Dependencies
 
@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 ## Pretraining
 
-The first stage of training involves optimizing the regularized reconstruction loss. To start training with the default settings, add your training and testing images to the `./dataset/train` and `./dataset/test` folders respectively and call the pretraining script like in the example below.
+The first stage of training involves optimizing the regularized reconstruction loss. To start training with the default settings, add your training and testing images to the `./dataset/train` and `./dataset/test` folders respectively and call the pretraining script like in the example below. If you are looking for good training sets to start with we recommend the `DIV2K`, `Flicker2K`, and/or Outdoor Scene Train/Test (`OST`) datasets.
 
 ```
 python pretrain.py
@@ -38,13 +38,13 @@ You can customize the upscaler model by adjusting the `num_channels`, `hidden_ra
 python pretrain.py --num_channels=128 --hidden_ratio=2 --num_layers=32
 ```
 
-You can also adjust the `learning_rate`, `batch_size`, and `gradient_accumulation_steps` to suite your training setup.
+You can also adjust the `batch_size`, `learning_rate`, and `gradient_accumulation_steps` to suite your training setup.
 
 ```
 python pretrain.py --batch_size=16 --learning_rate=0.01 --gradient_accumulation_steps=8
 ```
 
-In addition, you can control various data augmentation arguments such as the brightness, contrast, hue, and saturation jitter.
+In addition, you can control various training data augmentation arguments such as the brightness, contrast, hue, and saturation jitter.
 
 ```
 python pretrain.py --brightness_jitter=0.5 --contrast_jitter=0.4 --hue_jitter=0.3 --saturation_jitter=0.2
@@ -95,13 +95,13 @@ Then navigate to the dashboard using your favorite web browser.
 
 ### Fine-tuning
 
-The fine-tuning stage of the model is optional but can greatly improve the visual fidelity (VIF) of the upscaled images without impacting the peak signal-to-noise ratio (PSNR) or structural similarity (SSIM) achieved during pretraining. To fine-tune the model from the default checkpoint at `./checkpoints/checkpoint.pt` with the default arguments you can run the following command.
+The fine-tuning stage of the model is optional but can greatly improve the visual fidelity (VIF) of the upscaled images without impacting the peak signal-to-noise ratio (PSNR) or structural similarity (SSIM) achieved during pretraining. In the fine-tuning stage, we employ a critic network which is similar to a ResNet in architecture and is jointly trained alongside the upscaler. To fine-tune the model from the default checkpoint at `./checkpoints/checkpoint.pt` with the default arguments you can run the following command.
 
 ```
 python fine-tune.py
 ```
 
-You can adjust the size and strength of the critic network used for adversarial training as well as the number of warmup epochs like in the example below.
+You can adjust the size and strength of the critic network used for adversarial training as well as the number of warmup epochs like in the example below. The critic model sizes `small`, `medium`, and `large` generally correspond to the 50, 101, and 152 layer variants of the ResNet architecture. Note that larger critic models will be able to distinguish more details in the image and therefore will produce a stronger training signal for the upscaler to learn from.
 
 ```
 python fine-tune.py --critic_warmup_epochs=10 --critic_model_size="large"
@@ -139,7 +139,7 @@ python fine-tune.py --critic_warmup_epochs=10 --critic_model_size="large"
 
 ## Upscaling
 
-You can use the provided `upscale.py` script to generate upscaled images from the trained model at the default checkpoint like in the example below.
+You can use the provided `upscale.py` script to generate upscaled images from the trained model at the default checkpoint like in the example below. In addition, you can create your own inferencing pipeline using the same model under the hood that leverages batch processing for large scale production systems.
 
 ```
 python upscale.py --image_path="./example.jpg"
