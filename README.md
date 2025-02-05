@@ -26,7 +26,7 @@ pip install -r requirements.txt
 
 ## Pretraining
 
-The first stage of training involves optimizing the regularized reconstruction loss. To start training with the default settings, add your training and testing images to the `./dataset/train` and `./dataset/test` folders respectively and call the pretraining script like in the example below. If you are looking for good training sets to start with we recommend the `DIV2K`, `Flicker2K`, and/or Outdoor Scene Train/Test (`OST`) datasets.
+The first stage of training involves minimizing the regularized reconstruction loss to optimize peak signal-to-noise ratio (PSNR) and structural similarity (SSIM) of the upscaled image. To start training with the default settings, add your training and testing images to the `./dataset/train` and `./dataset/test` folders respectively and call the pretraining script like in the example below. If you are looking for good training sets to start with we recommend the `DIV2K`, `Flicker2K`, and/or Outdoor Scene Train/Test (`OST`) datasets.
 
 ```
 python pretrain.py
@@ -95,10 +95,16 @@ Then navigate to the dashboard using your favorite web browser.
 
 ### Fine-tuning
 
-The fine-tuning stage of the model is optional but can greatly improve the visual fidelity (VIF) of the upscaled images without impacting the peak signal-to-noise ratio (PSNR) or structural similarity (SSIM) achieved during pretraining. In the fine-tuning stage, we employ a critic network which is similar to a ResNet in architecture and is jointly trained alongside the upscaler. To fine-tune the model from the default checkpoint at `./checkpoints/checkpoint.pt` with the default arguments you can run the following command.
+The fine-tuning stage of the model is optional but can greatly improve the visual fidelity (VIF) of the upscaled images without impacting the peak signal-to-noise ratio (PSNR) or structural similarity (SSIM) achieved during pretraining. In the fine-tuning stage, we employ a critic network which is similar to a ResNet in architecture and is jointly trained alongside the upscaler on its outputs. To fine-tune the model from the default checkpoint at `./checkpoints/checkpoint.pt` with the default arguments you can run the following command.
 
 ```
 python fine-tune.py
+```
+
+To fine-tune from a different model checkpoint you can specify the `checkpoint_path` argument like in the example below.
+
+```
+python fine-tune.py --checkpoint_path="./checkpoints/small4x.pt"
 ```
 
 You can adjust the size and strength of the critic network used for adversarial training as well as the number of warmup epochs like in the example below. The critic model sizes `small`, `medium`, and `large` generally correspond to the 50, 101, and 152 layer variants of the ResNet architecture. Note that larger critic models will be able to distinguish more details in the image and therefore will produce a stronger training signal for the upscaler to learn from.
