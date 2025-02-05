@@ -4,9 +4,9 @@ SuperCool is a fast single-image super-resolution (SISR) model capable of upscal
 
 ## Key Features
 
-- **High visual information fidelity**: SuperCool employs a secondary fine-tuning stage that increases the visual fidelity (VIF) of the output while maintaining the peak signal-to-noise (PSNR) and structural similarity (SSIM) achieved during pretraining. The result are upscaled images that are perceived to be more appealing to the human eye.
+- **High visual fidelity**: SuperCool employs a secondary fine-tuning stage that increases the visual fidelity (VIF) of the output while maintaining the peak signal-to-noise (PSNR) and structural similarity (SSIM) achieved during pretraining. The result are upscaled images that are perceived to be more appealing to the human eye.
 
-- **Very fast**: Instead of directly predicting the individual pixels of the upscaled image, SuperCool uses a fast deterministic  upscaling algorithm and then fills in the missing details through a residual pathway that operates primarily within the low-resolution subspace. As such, the model is capable of being used for real-time image processing.
+- **Very fast inference**: Instead of directly predicting the individual pixels of the upscaled image, SuperCool uses a fast deterministic  upscaling algorithm and then fills in the missing details through a residual pathway that operates primarily within the low-resolution subspace. As such, the model is capable of being used for real-time image processing.
 
 - **Train on your own images**: SuperCool's dataloader and preprocessing pipeline works with any of the popular image formats including JPEG, PNG, WEBP, and GIF. Just point the training script to the location of the folder containing your training images and begin training. This enabled you to build upscalers that specialize on certain types of images such as satellite photos or portraits.
 
@@ -66,7 +66,7 @@ Then navigate to the dashboard using your favorite web browser.
 |---|---|---|---|
 | --train_images_path | "./dataset/train" | str | The path to the folder containing your training images. |
 | --test_images_path | "./dataset/test" | str | The path to the folder containing your testing images. |
-| --num_dataset_processes | 4 | int | The number of CPU processes to use to process the dataset. |
+| --num_dataset_processes | 4 | int | The number of CPU processes to use to preprocess the dataset. |
 | --target_resolution | 256 | int | The number of pixels in the height and width dimensions of the training images. |
 | --upscale_ratio | 4 | (2, 4, 8) | The upscaling factor. |
 | --brightness_jitter | 0.1 | float | The amount of jitter applied to the brightness of the training images. |

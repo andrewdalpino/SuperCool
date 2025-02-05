@@ -273,15 +273,16 @@ def main():
                     l2_loss = l2_loss_function(u_pred, y)
                     tv_loss = tv_loss_function(u_pred)
 
+                    reconstruction_loss = l2_loss + args.tv_penalty * tv_loss
+
                     c_pred = critic(u_pred)
 
                     u_bce_loss = bce_loss_function(c_pred, real_labels)
 
                     u_loss = (
-                        l2_loss / l2_loss.detach() + u_bce_loss / u_bce_loss.detach()
+                        reconstruction_loss / reconstruction_loss.detach()
+                        + u_bce_loss / u_bce_loss.detach()
                     )  # Dynamically weight the losses
-
-                    u_loss += args.tv_penalty * tv_loss
 
                     u_loss /= args.gradient_accumulation_steps
 
@@ -315,8 +316,8 @@ def main():
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
         logger.add_scalar("L2 Loss", average_l2_loss, epoch)
-        logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
         logger.add_scalar("TV Loss", average_tv_loss, epoch)
+        logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
         logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
         logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
         logger.add_scalar("Critic Norm", average_c_gradient_norm, epoch)
@@ -324,8 +325,8 @@ def main():
         print(
             f"Epoch {epoch}:",
             f"L2 Loss: {average_l2_loss:.5},",
-            f"BCE Loss: {average_u_bce_loss:.5},",
             f"TV Loss: {average_tv_loss:.5},",
+            f"BCE Loss: {average_u_bce_loss:.5},",
             f"Gradient Norm: {average_u_gradient_norm:.4},",
             f"Critic BCE: {average_c_bce_loss:.5},",
             f"Critic Norm: {average_c_gradient_norm:.4}",
