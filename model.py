@@ -18,6 +18,7 @@ from torch.nn import (
 )
 
 from torch.nn.utils.parametrizations import weight_norm
+from torch.nn.utils.parametrize import remove_parametrizations
 
 from huggingface_hub import PyTorchModelHubMixin
 
@@ -78,6 +79,14 @@ class SuperCool(Module, PyTorchModelHubMixin):
     @property
     def num_trainable_params(self) -> int:
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
+
+    def remove_weight_norms(self) -> None:
+        for module in self.modules():
+            if hasattr(module, "parametrizations"):
+                params = [name for name in module.parametrizations.keys()]
+
+                for name in params:
+                    remove_parametrizations(module, name, leave_parametrized=True)
 
     def forward(self, x: Tensor) -> Tensor:
         z = self.input(x)

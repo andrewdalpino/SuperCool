@@ -56,7 +56,7 @@ def main():
     parser.add_argument(
         "--base_upscaler", default="bicubic", choices=("bilinear", "bicubic")
     )
-    parser.add_argument("--num_channels", default=128, type=int)
+    parser.add_argument("--num_channels", default=64, type=int)
     parser.add_argument("--hidden_ratio", default=2, choices=(1, 2, 4), type=int)
     parser.add_argument("--num_layers", default=16, type=int)
     parser.add_argument("--eval_interval", default=5, type=int)

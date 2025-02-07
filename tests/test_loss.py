@@ -6,6 +6,7 @@ from torch import Tensor
 
 from loss import TVLoss
 
+
 class TestTVLoss(TestCase):
     def setUp(self):
         self.loss_function = TVLoss()
@@ -28,5 +29,6 @@ class TestTVLoss(TestCase):
 
         self.assertEqual(penalty.item(), 0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
