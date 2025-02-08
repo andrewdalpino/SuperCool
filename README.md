@@ -8,7 +8,7 @@ SuperCool is a fast single-image super-resolution (SISR) model capable of upscal
 
 - **Very fast inference**: Instead of directly predicting the individual pixels of the upscaled image, SuperCool uses a fast deterministic  upscaling algorithm and then fills in the missing details through a residual pathway that operates primarily within the low-resolution subspace. As such, the model is capable of being used for real-time image processing.
 
-- **Train on your own images**: SuperCool's dataloader and preprocessing pipeline works with any of the popular image formats including JPEG, PNG, WEBP, and GIF. Just point the training script to the location of the folder containing your training images and begin training. This enabled you to build upscalers that specialize on certain types of images such as satellite photos or portraits.
+- **Train on your own images**: SuperCool's dataloader and preprocessing pipeline works with any of the popular image formats including JPEG, PNG, WEBP, and GIF. Just point the training script to the location of the folder containing your training images and begin training. This enables you to build upscalers that specialize on certain types of images such as satellite photos or portraits.
 
 - **Adjustable model size**: Depending on your computing and memory budget, you can train larger or smaller models by adjusting a few hyper-parameters such as the number of hidden channels, number of hidden layers, and size/strength of the adversarial model.
 
