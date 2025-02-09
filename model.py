@@ -39,12 +39,12 @@ class SuperCool(Module, PyTorchModelHubMixin):
     ):
         super().__init__()
 
-        if base_upscaler not in ("bilinear", "bicubic"):
+        if base_upscaler not in {"bilinear", "bicubic"}:
             raise ValueError(
                 f"Base upscaler must be bilinear or bicubic, {base_upscaler} given."
             )
 
-        if upscale_ratio not in (2, 4, 8):
+        if upscale_ratio not in {2, 4, 8}:
             raise ValueError(
                 f"Upscale ratio must be either 2, 4, or 8, {upscale_ratio} given."
             )
@@ -54,7 +54,7 @@ class SuperCool(Module, PyTorchModelHubMixin):
                 f"Num channels must be greater than 0, {num_channels} given."
             )
 
-        if hidden_ratio not in (1, 2, 4):
+        if hidden_ratio not in {1, 2, 4}:
             raise ValueError(
                 f"Hidden ratio must be either 1, 2, or 4, {hidden_ratio} given."
             )
@@ -111,7 +111,7 @@ class EncoderBlock(Module):
     def __init__(self, num_channels: int, hidden_ratio: int):
         super().__init__()
 
-        if hidden_ratio not in (1, 2, 4):
+        if hidden_ratio not in {1, 2, 4}:
             raise ValueError(
                 f"Hidden ratio must be either 1, 2, or 4, {hidden_ratio} given."
             )

@@ -27,7 +27,7 @@ class ImageFolder(Dataset):
         target_resolution: int,
         pre_transformer: Transform | None = None,
     ):
-        if upscale_ratio not in (2, 4, 8):
+        if upscale_ratio not in {2, 4, 8}:
             raise ValueError(
                 f"Upscale ratio must be either 2, 4, or 8, {upscale_ratio} given."
             )
