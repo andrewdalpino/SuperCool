@@ -16,7 +16,7 @@ from torchvision.transforms.v2 import (
 
 
 class ImageFolder(Dataset):
-    ALLOWED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+    ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
     IMAGE_MODE = "RGB"
 
