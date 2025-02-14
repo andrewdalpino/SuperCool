@@ -18,6 +18,8 @@ SuperCool is a fast single-image super-resolution (SISR) model capable of upscal
 
 ![Super Cool 4X Medium Comparison](https://raw.githubusercontent.com/andrewdalpino/SuperCool/master/docs/images/comparison-4x-medium.png)
 
+![Super Cool 4X Large Comparison](https://raw.githubusercontent.com/andrewdalpino/SuperCool/master/docs/images/comparison-4x-large.png)
+
 ## Install Project Dependencies
 
 Project dependencies are specified in the `requirements.txt` file. You can install them with [pip](https://pip.pypa.io/en/stable/) using the following command from the project root. We recommend using a virtual environment such as `venv` to keep package dependencies on your system tidy.
