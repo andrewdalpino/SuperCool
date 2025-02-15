@@ -38,6 +38,8 @@ def main():
 
     print("Model checkpoint loaded successfully")
 
+    model.remove_weight_norms()
+
     image_to_tensor = ToDtype(torch.float32, scale=True)
     tensor_to_image = ToPILImage()
 
