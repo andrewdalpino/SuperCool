@@ -6,15 +6,9 @@ from torch.nn import (
     Module,
     Sequential,
     Conv2d,
+    SiLU,
     Upsample,
     PixelShuffle,
-    SiLU,
-    BatchNorm2d,
-    MaxPool2d,
-    AdaptiveAvgPool2d,
-    Identity,
-    Flatten,
-    Linear,
 )
 
 from torch.nn.utils.parametrizations import weight_norm
@@ -26,25 +20,23 @@ from huggingface_hub import PyTorchModelHubMixin
 class SuperCool(Module, PyTorchModelHubMixin):
     """
     A fast single-image super-resolution model with a deep low-resolution encoder network
-    and high-resolution sub-pixel convolutional decoder head with global residual pathway.
+    and high-resolution sub-pixel convolutional decoder head with global residual pathway..
     """
+
+    AVAILABLE_UPSCALE_RATIOS = {2, 4, 8}
+
+    AVAILABLE_HIDDEN_RATIOS = {1, 2, 4}
 
     def __init__(
         self,
-        base_upscaler: str,
         upscale_ratio: int,
         num_channels: int,
         hidden_ratio: int,
-        num_layers: int,
+        num_encoder_layers: int,
     ):
         super().__init__()
 
-        if base_upscaler not in {"bilinear", "bicubic"}:
-            raise ValueError(
-                f"Base upscaler must be bilinear or bicubic, {base_upscaler} given."
-            )
-
-        if upscale_ratio not in {2, 4, 8}:
+        if upscale_ratio not in self.AVAILABLE_UPSCALE_RATIOS:
             raise ValueError(
                 f"Upscale ratio must be either 2, 4, or 8, {upscale_ratio} given."
             )
@@ -54,53 +46,79 @@ class SuperCool(Module, PyTorchModelHubMixin):
                 f"Num channels must be greater than 0, {num_channels} given."
             )
 
-        if hidden_ratio not in {1, 2, 4}:
+        if hidden_ratio not in self.AVAILABLE_HIDDEN_RATIOS:
             raise ValueError(
                 f"Hidden ratio must be either 1, 2, or 4, {hidden_ratio} given."
             )
 
-        if num_layers < 1:
-            raise ValueError(f"Num layers must be greater than 0, {num_layers} given.")
+        if num_encoder_layers < 1:
+            raise ValueError(
+                f"Num layers must be greater than 0, {num_encoder_layers} given."
+            )
 
-        self.input = weight_norm(Conv2d(3, num_channels, kernel_size=5, padding=2))
+        self.skip = Decoder(3, upscale_ratio)
 
-        self.skip = Upsample(scale_factor=upscale_ratio, mode=base_upscaler)
-
-        self.encoder = Sequential(
-            *[EncoderBlock(num_channels, hidden_ratio) for _ in range(num_layers)]
-        )
-
-        self.decoder = SubpixelConv2d(
-            num_channels, upscale_ratio, kernel_size=3, padding=1
-        )
-
-        self.shuffle = PixelShuffle(upscale_ratio)
+        self.encoder = Encoder(num_channels, hidden_ratio, num_encoder_layers)
+        self.decoder = Decoder(num_channels, upscale_ratio)
 
     @property
     def num_trainable_params(self) -> int:
         return sum(param.numel() for param in self.parameters() if param.requires_grad)
 
-    def remove_weight_norms(self) -> None:
+    def add_weight_norms(self) -> None:
+        """Add weight normalization to all Conv2d layers in the model."""
+
         for module in self.modules():
-            if hasattr(module, "parametrizations"):
+            if isinstance(module, Conv2d):
+                weight_norm(module)
+
+    def remove_weight_norms(self) -> None:
+        """Remove weight normalization parameterization."""
+
+        for module in self.modules():
+            if isinstance(module, Conv2d) and hasattr(module, "parametrizations"):
                 params = [name for name in module.parametrizations.keys()]
 
                 for name in params:
-                    remove_parametrizations(module, name, leave_parametrized=True)
+                    remove_parametrizations(module, name)
 
     def forward(self, x: Tensor) -> Tensor:
-        z = self.input(x)
+        s = self.skip.forward(x)
 
-        z = self.encoder(z)
+        z = self.encoder.forward(x)
+        z = self.decoder.forward(z)
 
-        z = self.decoder(z)
-        z = self.shuffle(z)
+        s += z  # Global residual connection
 
-        s = self.skip(x)
+        return s
 
-        z += s  # Global residual connection
+    @torch.no_grad()
+    def upscale(self, x: Tensor) -> Tensor:
+        z = self.forward(x)
 
         z = torch.clamp(z, 0, 1)
+
+        return z
+
+
+class Encoder(Module):
+    def __init__(self, num_channels: int, hidden_ratio: int, num_layers: int):
+        super().__init__()
+
+        assert num_channels > 0, "Number of channels must be greater than 0."
+        assert hidden_ratio in {1, 2, 4}, "Hidden ratio must be either 1, 2, or 4."
+        assert num_layers > 0, "Number of layers must be greater than 0."
+
+        self.input = Conv2d(3, num_channels, kernel_size=1)
+
+        self.body = Sequential(
+            *[EncoderBlock(num_channels, hidden_ratio) for _ in range(num_layers)]
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        z = self.input.forward(x)
+
+        z = self.body.forward(z)
 
         return z
 
@@ -111,49 +129,51 @@ class EncoderBlock(Module):
     def __init__(self, num_channels: int, hidden_ratio: int):
         super().__init__()
 
-        if hidden_ratio not in {1, 2, 4}:
-            raise ValueError(
-                f"Hidden ratio must be either 1, 2, or 4, {hidden_ratio} given."
-            )
+        assert num_channels > 0, "Number of channels must be greater than 0."
+        assert hidden_ratio in {1, 2, 4}, "Hidden ratio must be either 1, 2, or 4."
 
-        hidden_channels = num_channels * hidden_ratio
+        hidden_channels = hidden_ratio * num_channels
 
-        conv1 = Conv2d(num_channels, hidden_channels, kernel_size=3, padding=1)
-        conv2 = Conv2d(hidden_channels, num_channels, kernel_size=3, padding=1)
-
-        self.conv1 = weight_norm(conv1)
-        self.conv2 = weight_norm(conv2)
+        self.conv1 = Conv2d(num_channels, hidden_channels, kernel_size=7, padding=3)
+        self.conv2 = Conv2d(hidden_channels, num_channels, kernel_size=7, padding=3)
 
         self.silu = SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
-        z = self.conv1(x)
-        z = self.silu(z)
-        z = self.conv2(z)
+        s = x.clone()
 
-        z += x  # Local residual connection
+        z = self.conv1.forward(x)
+        z = self.silu.forward(z)
+        z = self.conv2.forward(z)
 
-        return z
+        s += z  # Local residual connection
+
+        return s
 
 
-class SubpixelConv2d(Module):
-    """A sub-pixel (1 / upscale_ratio) convolution layer with weight normalization."""
+class Decoder(Module):
+    """A high-resolution decoder head with sub-pixel convolution and pixel shuffling."""
 
-    def __init__(
-        self, num_channels: int, upscale_ratio: int, kernel_size: int, padding: int
-    ):
+    def __init__(self, num_channels: int, upscale_ratio: int):
         super().__init__()
+
+        assert num_channels > 0, "Number of channels must be greater than 0."
+        assert upscale_ratio in {2, 4, 8}, "Upscale ratio must be either 2, 4, or 8."
 
         channels_out = 3 * upscale_ratio**2
 
-        conv = Conv2d(
-            num_channels, channels_out, kernel_size=kernel_size, padding=padding
+        self.subpixel_conv = Conv2d(
+            num_channels, channels_out, kernel_size=7, padding=3
         )
 
-        self.conv = weight_norm(conv)
+        self.shuffle = PixelShuffle(upscale_ratio)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.conv(x)
+        z = self.subpixel_conv.forward(x)
+
+        z = self.shuffle.forward(z)
+
+        return z
 
 
 class Bouncer(Module):
