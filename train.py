@@ -6,8 +6,9 @@ import torch
 
 from torch.utils.data import DataLoader
 from torch.nn import MSELoss, BCEWithLogitsLoss
+from torch.nn.functional import softmax
 from torch.nn.utils import clip_grad_norm_
-from torch.optim import Adafactor
+from torch.optim import AdamW
 from torch.amp import autocast
 from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.utils.tensorboard import SummaryWriter
@@ -33,38 +34,39 @@ from tqdm import tqdm
 
 
 def main():
-    parser = ArgumentParser(description="Generative adversarial fine-tuning script.")
+    parser = ArgumentParser(description="Generative adversarial training script.")
 
     parser.add_argument(
         "--base_model_path", default="./checkpoints/checkpoint.pt", type=str
     )
     parser.add_argument("--train_images_path", default="./dataset/train", type=str)
     parser.add_argument("--test_images_path", default="./dataset/test", type=str)
-    parser.add_argument("--num_dataset_processes", default=4, type=int)
-    parser.add_argument("--target_resolution", default=256, type=int)
+    parser.add_argument("--num_dataset_processes", default=2, type=int)
+    parser.add_argument("--target_resolution", default=512, type=int)
     parser.add_argument("--brightness_jitter", default=0.1, type=float)
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
     parser.add_argument("--hue_jitter", default=0.1, type=float)
-    parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
+    parser.add_argument("--batch_size", default=2, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=32, type=int)
     parser.add_argument("--critic_warmup_epochs", default=3, type=int)
     parser.add_argument("--num_epochs", default=100, type=int)
     parser.add_argument("--learning_rate", default=1e-2, type=float)
-    parser.add_argument("--rms_decay", default=-0.8, type=float)
-    parser.add_argument("--tv_penalty", default=0.5, type=float)
-    parser.add_argument("--low_memory_optimizer", action="store_true")
+    parser.add_argument("--task_sampling_temperature", default=1.0, type=float)
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
+    parser.add_argument("--num_channels", default=128, type=int)
+    parser.add_argument("--hidden_ratio", default=2, choices={1, 2, 4}, type=int)
+    parser.add_argument("--num_encoder_layers", default=20, type=int)
     parser.add_argument(
-        "--critic_model_size", default="small", choices=("small", "medium", "large")
+        "--critic_model_size", default="small", choices={"small", "medium", "large"}
     )
-    parser.add_argument("--eval_interval", default=5, type=int)
-    parser.add_argument("--checkpoint_interval", default=10, type=int)
+    parser.add_argument("--eval_interval", default=2, type=int)
+    parser.add_argument("--checkpoint_interval", default=2, type=int)
     parser.add_argument(
         "--checkpoint_path", default="./checkpoints/fine-tuned.pt", type=str
     )
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--run_dir_path", default="./runs/fine-tune", type=str)
+    parser.add_argument("--run_dir_path", default="./runs", type=str)
     parser.add_argument("--device", default="cuda", type=str)
     parser.add_argument("--seed", default=None, type=int)
 
@@ -108,12 +110,6 @@ def main():
 
     logger = SummaryWriter(args.run_dir_path)
 
-    checkpoint = torch.load(
-        args.base_model_path, map_location=args.device, weights_only=True
-    )
-
-    model_args = checkpoint["model_args"]
-
     pre_transformer = Compose(
         [
             RandomResizedCrop(args.target_resolution),
@@ -129,13 +125,13 @@ def main():
 
     training = ImageFolder(
         root_path=args.train_images_path,
-        upscale_ratio=model_args["upscale_ratio"],
+        upscale_ratio=args.upscale_ratio,
         target_resolution=args.target_resolution,
         pre_transformer=pre_transformer,
     )
     testing = ImageFolder(
         root_path=args.test_images_path,
-        upscale_ratio=model_args["upscale_ratio"],
+        upscale_ratio=args.upscale_ratio,
         target_resolution=args.target_resolution,
     )
 
@@ -154,13 +150,17 @@ def main():
         num_workers=args.num_dataset_processes,
     )
 
-    upscaler = SuperCool(**model_args)
+    upscaler_args = {
+        "upscale_ratio": args.upscale_ratio,
+        "num_channels": args.num_channels,
+        "hidden_ratio": args.hidden_ratio,
+        "num_encoder_layers": args.num_encoder_layers,
+    }
 
+    upscaler = SuperCool(**upscaler_args)
+
+    print("Compiling upscaler model")
     upscaler = torch.compile(upscaler)
-
-    upscaler.load_state_dict(checkpoint["model"])
-
-    print("Model checkpoint loaded")
 
     critic_args = {
         "model_size": args.critic_model_size,
@@ -168,27 +168,18 @@ def main():
 
     critic = Bouncer(**critic_args)
 
+    print("Compiling critic model")
     critic = torch.compile(critic)
 
     upscaler = upscaler.to(args.device)
     critic = critic.to(args.device)
 
     l2_loss_function = MSELoss()
-    tv_loss_function = TVLoss()
     bce_loss_function = BCEWithLogitsLoss()
+    tv_loss_function = TVLoss()
 
-    upscaler_optimizer = Adafactor(
-        upscaler.parameters(),
-        lr=args.learning_rate,
-        beta2_decay=args.rms_decay,
-        foreach=not args.low_memory_optimizer,
-    )
-    critic_optimizer = Adafactor(
-        critic.parameters(),
-        lr=args.learning_rate,
-        beta2_decay=args.rms_decay,
-        foreach=not args.low_memory_optimizer,
-    )
+    upscaler_optimizer = AdamW(upscaler.parameters(), lr=args.learning_rate)
+    critic_optimizer = AdamW(critic.parameters(), lr=args.learning_rate)
 
     starting_epoch = 1
 
@@ -197,8 +188,8 @@ def main():
             args.checkpoint_path, map_location="cpu", weights_only=True
         )  # Always load into CPU RAM first to prevent CUDA out-of-memory errors.
 
-        upscaler.load_state_dict(checkpoint["model"])
-        upscaler_optimizer.load_state_dict(checkpoint["optimizer"])
+        upscaler.load_state_dict(checkpoint["upscaler"])
+        upscaler_optimizer.load_state_dict(checkpoint["upscaler_optimizer"])
 
         critic.load_state_dict(checkpoint["critic"])
         critic_optimizer.load_state_dict(checkpoint["critic_optimizer"])
@@ -237,11 +228,11 @@ def main():
             fake_labels = torch.full((x.size(0), 1), 0.0).to(args.device)
 
             with amp_context:
-                c_pred_real = critic(y)
+                c_pred_real = critic.forward(y)
 
-                u_pred = upscaler(x)
+                u_pred = upscaler.forward(x)
 
-                c_pred_fake = critic(u_pred.detach())
+                c_pred_fake = critic.forward(u_pred.detach())
 
                 c_pred = torch.cat((c_pred_real, c_pred_fake), dim=0)
                 labels = torch.cat((real_labels, fake_labels), dim=0)
@@ -250,9 +241,9 @@ def main():
 
                 c_loss = c_bce_loss
 
-                c_loss /= args.gradient_accumulation_steps
+                scaled_c_loss = c_loss / args.gradient_accumulation_steps
 
-            c_loss.backward()
+            scaled_c_loss.backward()
 
             update_this_step = step % args.gradient_accumulation_steps == 0
 
@@ -271,22 +262,34 @@ def main():
             if epoch > args.critic_warmup_epochs:
                 with amp_context:
                     l2_loss = l2_loss_function(u_pred, y)
-                    tv_loss = tv_loss_function(u_pred)
 
-                    reconstruction_loss = l2_loss + args.tv_penalty * tv_loss
-
-                    c_pred = critic(u_pred)
+                    c_pred = critic.forward(u_pred)
 
                     u_bce_loss = bce_loss_function(c_pred, real_labels)
 
-                    u_loss = (
-                        reconstruction_loss / reconstruction_loss.detach()
-                        + u_bce_loss / u_bce_loss.detach()
-                    )  # Dynamically weight the losses
+                    tv_loss = tv_loss_function(u_pred)
 
-                    u_loss /= args.gradient_accumulation_steps
+                    normalized_losses = torch.stack(
+                        [
+                            l2_loss / l2_loss.detach(),
+                            u_bce_loss / u_bce_loss.detach(),
+                            tv_loss / tv_loss.detach(),
+                        ]
+                    )
 
-                u_loss.backward()
+                    r = torch.randn(3, device=args.device)
+
+                    r /= args.task_sampling_temperature
+
+                    task_weights = softmax(r, dim=0)
+
+                    weighted_losses = task_weights * normalized_losses
+
+                    u_loss = weighted_losses.sum()
+
+                    scaled_u_loss = u_loss / args.gradient_accumulation_steps
+
+                scaled_u_loss.backward()
 
                 if update_this_step:
                     norm = clip_grad_norm_(
@@ -298,8 +301,8 @@ def main():
                     total_u_gradient_norm += norm.item()
 
                 total_l2_loss += l2_loss.item()
-                total_tv_loss += tv_loss.item()
                 total_u_bce_loss += u_bce_loss.item()
+                total_tv_loss += tv_loss.item()
 
             if update_this_step:
                 upscaler_optimizer.zero_grad(set_to_none=True)
@@ -308,27 +311,27 @@ def main():
             total_batches += 1
 
         average_l2_loss = total_l2_loss / total_batches
-        average_tv_loss = total_tv_loss / total_batches
         average_u_bce_loss = total_u_bce_loss / total_batches
         average_c_bce_loss = total_c_bce_loss / total_batches
+        average_tv_loss = total_tv_loss / total_batches
 
         average_u_gradient_norm = total_u_gradient_norm / total_steps
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
-        logger.add_scalar("L2 Loss", average_l2_loss, epoch)
-        logger.add_scalar("TV Loss", average_tv_loss, epoch)
-        logger.add_scalar("BCE Loss", average_u_bce_loss, epoch)
-        logger.add_scalar("Gradient Norm", average_u_gradient_norm, epoch)
+        logger.add_scalar("Reconstruction L2", average_l2_loss, epoch)
+        logger.add_scalar("Upscaler BCE", average_u_bce_loss, epoch)
         logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
+        logger.add_scalar("TV Loss", average_tv_loss, epoch)
+        logger.add_scalar("Upscaler Norm", average_u_gradient_norm, epoch)
         logger.add_scalar("Critic Norm", average_c_gradient_norm, epoch)
 
         print(
             f"Epoch {epoch}:",
-            f"L2 Loss: {average_l2_loss:.5},",
-            f"TV Loss: {average_tv_loss:.5},",
-            f"BCE Loss: {average_u_bce_loss:.5},",
-            f"Gradient Norm: {average_u_gradient_norm:.4},",
+            f"Reconstruction L2: {average_l2_loss:.5},",
+            f"Upscaler BCE: {average_u_bce_loss:.5},",
             f"Critic BCE: {average_c_bce_loss:.5},",
+            f"TV Loss: {average_tv_loss:.5},",
+            f"Upscaler Norm: {average_u_gradient_norm:.4},",
             f"Critic Norm: {average_c_gradient_norm:.4}",
         )
 
@@ -361,9 +364,9 @@ def main():
         if epoch % args.checkpoint_interval == 0:
             checkpoint = {
                 "epoch": epoch,
-                "model_args": model_args,
-                "model": upscaler.state_dict(),
-                "optimizer": upscaler_optimizer.state_dict(),
+                "upscaler_args": upscaler_args,
+                "upscaler": upscaler.state_dict(),
+                "upscaler_optimizer": upscaler_optimizer.state_dict(),
                 "critic_args": critic_args,
                 "critic": critic.state_dict(),
                 "critic_optimizer": critic_optimizer.state_dict(),

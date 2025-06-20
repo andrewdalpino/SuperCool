@@ -7,7 +7,6 @@ from torch.nn import (
     Sequential,
     Conv2d,
     SiLU,
-    Upsample,
     PixelShuffle,
 )
 
