@@ -1,4 +1,5 @@
 from os import path, walk
+from warnings import warn
 
 import torch
 
@@ -10,26 +11,37 @@ from torchvision.transforms.v2 import (
     Transform,
     Compose,
     Resize,
-    CenterCrop,
+    GaussianBlur,
+    GaussianNoise,
+    JPEG,
     ToDtype,
 )
 
+from torchvision.transforms.v2.functional import InterpolationMode
+
+from PIL import Image
+
+from model import SuperCool
+
 
 class ImageFolder(Dataset):
-    ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+    ALLOWED_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
 
     IMAGE_MODE = "RGB"
 
     def __init__(
         self,
         root_path: str,
-        upscale_ratio: int,
         target_resolution: int,
-        pre_transformer: Transform | None = None,
+        upscale_ratio: int,
+        pre_transformer: Transform | None,
+        blur_amount: float,
+        compression_amount: float,
+        noise_amount: float,
     ):
-        if upscale_ratio not in {2, 4, 8}:
+        if upscale_ratio not in SuperCool.AVAILABLE_UPSCALE_RATIOS:
             raise ValueError(
-                f"Upscale ratio must be either 2, 4, or 8, {upscale_ratio} given."
+                f"Upscale ratio must be either 2, 3, or 4, {upscale_ratio} given."
             )
 
         if target_resolution % upscale_ratio != 0:
@@ -37,33 +49,67 @@ class ImageFolder(Dataset):
                 f"Target resolution must divide evenly into upscale_ratio."
             )
 
-        image_paths = [
-            path.join(folder_path, filename)
-            for folder_path, _, filenames in walk(root_path)
-            for filename in filenames
-            if self.has_image_extension(filename)
-        ]
+        if blur_amount < 0.0:
+            raise ValueError(f"Blur amount must be non-negative, {blur_amount} given.")
 
-        input_transformer = Compose(
+        if compression_amount < 0.0 or compression_amount > 1.0:
+            raise ValueError(
+                f"Compression amount must be between 0 and 1, {compression_amount} given."
+            )
+
+        if noise_amount < 0.0 or noise_amount > 1.0:
+            raise ValueError(
+                f"Noise amount must be between 0 and 1, {noise_amount} given."
+            )
+
+        blur_sigma = blur_amount * upscale_ratio
+        blur_kernel_size = 2 * int(3 * blur_sigma) + 1
+
+        degraded_resolution = target_resolution // upscale_ratio
+
+        degraded_quality = 100 - int(compression_amount * 100)
+
+        degrade_transformer = Compose(
             [
-                Resize(target_resolution // upscale_ratio),
-                CenterCrop(target_resolution // upscale_ratio),
+                GaussianBlur(kernel_size=blur_kernel_size, sigma=blur_sigma),
+                Resize(degraded_resolution, interpolation=InterpolationMode.BICUBIC),
+                JPEG(quality=degraded_quality),
                 ToDtype(torch.float32, scale=True),
+                GaussianNoise(sigma=noise_amount),
             ]
         )
 
-        target_transformer = Compose(
-            [
-                Resize(target_resolution),
-                CenterCrop(target_resolution),
-                ToDtype(torch.float32, scale=True),
-            ]
-        )
+        target_transformer = ToDtype(torch.float32, scale=True)
 
-        self.image_paths = image_paths
+        image_paths = []
+        dropped = 0
+
+        for folder_path, _, filenames in walk(root_path):
+            for filename in filenames:
+                if self.has_image_extension(filename):
+                    image_path = path.join(folder_path, filename)
+
+                    image = Image.open(image_path)
+
+                    width, height = image.size
+
+                    if width < target_resolution or height < target_resolution:
+                        dropped += 1
+
+                        continue
+
+                    image_paths.append(image_path)
+
+        if dropped > 0:
+            warn(
+                f"Dropped {dropped} images that were smaller "
+                f"than the target resolution of {target_resolution}."
+            )
+
         self.pre_transformer = pre_transformer
-        self.input_transformer = input_transformer
+        self.degrade_transformer = degrade_transformer
         self.target_transformer = target_transformer
+        self.image_paths = image_paths
 
     @classmethod
     def has_image_extension(cls, filename: str) -> bool:
@@ -79,7 +125,7 @@ class ImageFolder(Dataset):
         if self.pre_transformer:
             image = self.pre_transformer(image)
 
-        x = self.input_transformer(image)
+        x = self.degrade_transformer(image)
         y = self.target_transformer(image)
 
         return x, y

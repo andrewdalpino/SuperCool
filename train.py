@@ -1,22 +1,24 @@
 import random
 
+from functools import partial
+
 from argparse import ArgumentParser
 
 import torch
 
 from torch.utils.data import DataLoader
 from torch.nn import MSELoss, BCEWithLogitsLoss
-from torch.nn.functional import softmax
 from torch.nn.utils import clip_grad_norm_
 from torch.optim import AdamW
 from torch.amp import autocast
 from torch.cuda import is_available as cuda_is_available, is_bf16_supported
+from torch.backends.mps import is_available as mps_is_available
 from torch.utils.tensorboard import SummaryWriter
 
 from torchvision.transforms.v2 import (
     Compose,
-    RandomResizedCrop,
-    RandomHorizontalFlip,
+    RandomCrop,
+    CenterCrop,
     ColorJitter,
 )
 
@@ -28,7 +30,6 @@ from torchmetrics.image import (
 
 from data import ImageFolder
 from model import SuperCool, Bouncer
-from loss import TVLoss
 
 from tqdm import tqdm
 
@@ -41,29 +42,34 @@ def main():
     )
     parser.add_argument("--train_images_path", default="./dataset/train", type=str)
     parser.add_argument("--test_images_path", default="./dataset/test", type=str)
-    parser.add_argument("--num_dataset_processes", default=2, type=int)
-    parser.add_argument("--target_resolution", default=512, type=int)
+    parser.add_argument("--num_dataset_processes", default=4, type=int)
+    parser.add_argument(
+        "--upscale_ratio",
+        default=2,
+        type=int,
+        choices=SuperCool.AVAILABLE_UPSCALE_RATIOS,
+    )
+    parser.add_argument("--target_resolution", default=256, type=int)
+    parser.add_argument("--blur_amount", default=0.5, type=float)
+    parser.add_argument("--compression_amount", default=0.2, type=float)
+    parser.add_argument("--noise_amount", default=0.02, type=float)
     parser.add_argument("--brightness_jitter", default=0.1, type=float)
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
     parser.add_argument("--hue_jitter", default=0.1, type=float)
     parser.add_argument("--batch_size", default=2, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=32, type=int)
-    parser.add_argument("--critic_warmup_epochs", default=3, type=int)
     parser.add_argument("--num_epochs", default=100, type=int)
-    parser.add_argument("--learning_rate", default=1e-2, type=float)
-    parser.add_argument("--task_sampling_temperature", default=1.0, type=float)
-    parser.add_argument("--max_gradient_norm", default=1.0, type=float)
-    parser.add_argument("--num_channels", default=128, type=int)
+    parser.add_argument("--critic_warmup_epochs", default=3, type=int)
+    parser.add_argument("--learning_rate", default=5e-4, type=float)
+    parser.add_argument("--max_gradient_norm", default=2.0, type=float)
+    parser.add_argument("--num_channels", default=96, type=int)
     parser.add_argument("--hidden_ratio", default=2, choices={1, 2, 4}, type=int)
     parser.add_argument("--num_encoder_layers", default=20, type=int)
-    parser.add_argument(
-        "--critic_model_size", default="small", choices={"small", "medium", "large"}
-    )
     parser.add_argument("--eval_interval", default=2, type=int)
     parser.add_argument("--checkpoint_interval", default=2, type=int)
     parser.add_argument(
-        "--checkpoint_path", default="./checkpoints/fine-tuned.pt", type=str
+        "--checkpoint_path", default="./checkpoints/checkpoint.pt", type=str
     )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--run_dir_path", default="./runs", type=str)
@@ -96,9 +102,14 @@ def main():
     if "cuda" in args.device and not cuda_is_available():
         raise RuntimeError("Cuda is not available.")
 
+    if "mps" in args.device and not mps_is_available():
+        raise RuntimeError("MPS is not available.")
+
+    torch.set_float32_matmul_precision("high")
+
     dtype = (
         torch.bfloat16
-        if args.device == "cuda" and is_bf16_supported()
+        if ("cuda" in args.device and is_bf16_supported()) or args.device == "mps"
         else torch.float32
     )
 
@@ -110,45 +121,44 @@ def main():
 
     logger = SummaryWriter(args.run_dir_path)
 
-    pre_transformer = Compose(
-        [
-            RandomResizedCrop(args.target_resolution),
-            RandomHorizontalFlip(),
-            ColorJitter(
-                brightness=args.brightness_jitter,
-                contrast=args.contrast_jitter,
-                saturation=args.saturation_jitter,
-                hue=args.hue_jitter,
-            ),
-        ]
+    new_dataset = partial(
+        ImageFolder,
+        target_resolution=args.target_resolution,
+        upscale_ratio=args.upscale_ratio,
+        blur_amount=args.blur_amount,
+        compression_amount=args.compression_amount,
+        noise_amount=args.noise_amount,
     )
 
-    training = ImageFolder(
-        root_path=args.train_images_path,
-        upscale_ratio=args.upscale_ratio,
-        target_resolution=args.target_resolution,
-        pre_transformer=pre_transformer,
-    )
-    testing = ImageFolder(
-        root_path=args.test_images_path,
-        upscale_ratio=args.upscale_ratio,
-        target_resolution=args.target_resolution,
+    training = new_dataset(
+        args.train_images_path,
+        pre_transformer=Compose(
+            [
+                RandomCrop(args.target_resolution),
+                ColorJitter(
+                    brightness=args.brightness_jitter,
+                    contrast=args.contrast_jitter,
+                    hue=args.hue_jitter,
+                    saturation=args.saturation_jitter,
+                ),
+            ]
+        ),
     )
 
-    train_loader = DataLoader(
-        training,
+    testing = new_dataset(
+        args.test_images_path,
+        pre_transformer=CenterCrop(args.target_resolution),
+    )
+
+    new_dataloader = partial(
+        DataLoader,
         batch_size=args.batch_size,
-        pin_memory="cpu" not in args.device,
-        shuffle=True,
+        pin_memory="cuda" in args.device,
         num_workers=args.num_dataset_processes,
     )
-    test_loader = DataLoader(
-        testing,
-        batch_size=args.batch_size,
-        pin_memory="cpu" not in args.device,
-        shuffle=False,
-        num_workers=args.num_dataset_processes,
-    )
+
+    train_loader = new_dataloader(training, shuffle=True)
+    test_loader = new_dataloader(testing)
 
     upscaler_args = {
         "upscale_ratio": args.upscale_ratio,
@@ -162,9 +172,7 @@ def main():
     print("Compiling upscaler model")
     upscaler = torch.compile(upscaler)
 
-    critic_args = {
-        "model_size": args.critic_model_size,
-    }
+    critic_args = {}
 
     critic = Bouncer(**critic_args)
 
@@ -176,7 +184,6 @@ def main():
 
     l2_loss_function = MSELoss()
     bce_loss_function = BCEWithLogitsLoss()
-    tv_loss_function = TVLoss()
 
     upscaler_optimizer = AdamW(upscaler.parameters(), lr=args.learning_rate)
     critic_optimizer = AdamW(critic.parameters(), lr=args.learning_rate)
@@ -213,8 +220,7 @@ def main():
     critic.train()
 
     for epoch in range(starting_epoch, args.num_epochs + 1):
-        total_l2_loss, total_tv_loss = 0.0, 0.0
-        total_u_bce_loss, total_c_bce_loss = 0.0, 0.0
+        total_l2_loss, total_u_bce_loss, total_c_bce_loss = 0.0, 0.0, 0.0
         total_u_gradient_norm, total_c_gradient_norm = 0.0, 0.0
         total_batches, total_steps = 0, 0
 
@@ -267,25 +273,9 @@ def main():
 
                     u_bce_loss = bce_loss_function(c_pred, real_labels)
 
-                    tv_loss = tv_loss_function(u_pred)
-
-                    normalized_losses = torch.stack(
-                        [
-                            l2_loss / l2_loss.detach(),
-                            u_bce_loss / u_bce_loss.detach(),
-                            tv_loss / tv_loss.detach(),
-                        ]
+                    u_loss = (
+                        l2_loss / l2_loss.detach() + u_bce_loss / u_bce_loss.detach()
                     )
-
-                    r = torch.randn(3, device=args.device)
-
-                    r /= args.task_sampling_temperature
-
-                    task_weights = softmax(r, dim=0)
-
-                    weighted_losses = task_weights * normalized_losses
-
-                    u_loss = weighted_losses.sum()
 
                     scaled_u_loss = u_loss / args.gradient_accumulation_steps
 
@@ -302,7 +292,6 @@ def main():
 
                 total_l2_loss += l2_loss.item()
                 total_u_bce_loss += u_bce_loss.item()
-                total_tv_loss += tv_loss.item()
 
             if update_this_step:
                 upscaler_optimizer.zero_grad(set_to_none=True)
@@ -313,24 +302,21 @@ def main():
         average_l2_loss = total_l2_loss / total_batches
         average_u_bce_loss = total_u_bce_loss / total_batches
         average_c_bce_loss = total_c_bce_loss / total_batches
-        average_tv_loss = total_tv_loss / total_batches
 
         average_u_gradient_norm = total_u_gradient_norm / total_steps
         average_c_gradient_norm = total_c_gradient_norm / total_steps
 
-        logger.add_scalar("Reconstruction L2", average_l2_loss, epoch)
+        logger.add_scalar("Pixel L2", average_l2_loss, epoch)
         logger.add_scalar("Upscaler BCE", average_u_bce_loss, epoch)
         logger.add_scalar("Critic BCE", average_c_bce_loss, epoch)
-        logger.add_scalar("TV Loss", average_tv_loss, epoch)
         logger.add_scalar("Upscaler Norm", average_u_gradient_norm, epoch)
         logger.add_scalar("Critic Norm", average_c_gradient_norm, epoch)
 
         print(
             f"Epoch {epoch}:",
-            f"Reconstruction L2: {average_l2_loss:.5},",
+            f"Pixel L2: {average_l2_loss:.5},",
             f"Upscaler BCE: {average_u_bce_loss:.5},",
             f"Critic BCE: {average_c_bce_loss:.5},",
-            f"TV Loss: {average_tv_loss:.5},",
             f"Upscaler Norm: {average_u_gradient_norm:.4},",
             f"Critic Norm: {average_c_gradient_norm:.4}",
         )
