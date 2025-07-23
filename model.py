@@ -12,7 +12,7 @@ from torch.nn import (
     Linear,
     Sigmoid,
     SiLU,
-    RMSNorm,
+    LayerNorm,
     AvgPool2d,
     AdaptiveAvgPool2d,
     PixelShuffle,
@@ -284,7 +284,7 @@ class Bouncer(Module):
 
 
 class Detector(Module):
-    """A feature extractor for the discriminator network."""
+    """A feature extractor for the critic network."""
 
     def __init__(
         self,
@@ -372,7 +372,7 @@ class DetectorBlock(Module):
         self.conv2 = Conv2d(num_channels, hidden_channels, kernel_size=1)
         self.conv3 = Conv2d(hidden_channels, num_channels, kernel_size=1)
 
-        self.norm = RMSNorm(num_channels)
+        self.norm = LayerNorm(num_channels)
 
         self.silu = SiLU()
 
@@ -391,17 +391,28 @@ class DetectorBlock(Module):
 class BinaryClassifier(Module):
     """A simple binary classifier for real and fake images."""
 
-    def __init__(self, num_features: int):
+    def __init__(self, input_features: int):
         super().__init__()
 
-        self.linear1 = Linear(num_features, num_features)
-        self.linear2 = Linear(num_features, 1)
+        assert input_features > 4, "Input features must be greater than 4."
+
+        layer2_hidden_features = input_features // 2
+        layer3_hidden_features = layer2_hidden_features // 2
+
+        self.linear1 = Linear(input_features, layer2_hidden_features)
+        self.linear2 = Linear(layer2_hidden_features, layer3_hidden_features)
+        self.linear3 = Linear(layer3_hidden_features, 1)
+
+        self.norm = LayerNorm(input_features)
 
         self.silu = SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
-        z = self.linear1(x)
+        z = self.norm(x)
+        z = self.linear1(z)
         z = self.silu(z)
         z = self.linear2(z)
+        z = self.silu(z)
+        z = self.linear3(z)
 
         return z
