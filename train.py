@@ -199,8 +199,8 @@ def main():
 
     if args.resume:
         checkpoint = torch.load(
-            args.checkpoint_path, map_location="cpu", weights_only=True
-        )  # Always load into CPU RAM first to prevent CUDA out-of-memory errors.
+            args.checkpoint_path, map_location=args.device, weights_only=True
+        )
 
         upscaler.load_state_dict(checkpoint["upscaler"])
         upscaler_optimizer.load_state_dict(checkpoint["upscaler_optimizer"])
@@ -209,9 +209,6 @@ def main():
         critic_optimizer.load_state_dict(checkpoint["critic_optimizer"])
 
         starting_epoch += checkpoint["epoch"]
-
-        upscaler = upscaler.to(args.device)
-        critic = critic.to(args.device)
 
         print("Previous checkpoint resumed successfully")
 

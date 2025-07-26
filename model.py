@@ -349,50 +349,63 @@ class Detector(Module):
 
         self.stem = Conv2d(3, num_primary_channels, kernel_size=4, stride=4)
 
-        body = Sequential()
+        stage1 = Sequential()
 
-        body.extend(
+        stage1.extend(
             [
                 DetectorBlock(num_primary_channels, num_primary_channels)
                 for _ in range(num_primary_layers)
             ]
         )
 
-        body.append(AvgPool2d(kernel_size=2, stride=2))
-        body.append(DetectorBlock(num_primary_channels, num_secondary_channels))
+        stage2 = Sequential()
 
-        body.extend(
+        stage2.append(AvgPool2d(kernel_size=2, stride=2))
+        stage2.append(DetectorBlock(num_primary_channels, num_secondary_channels))
+
+        stage2.extend(
             [
                 DetectorBlock(num_secondary_channels, num_secondary_channels)
                 for _ in range(num_secondary_layers - 1)
             ]
         )
 
-        body.append(AvgPool2d(kernel_size=2, stride=2))
-        body.append(DetectorBlock(num_secondary_channels, num_tertiary_channels))
+        stage3 = Sequential()
 
-        body.extend(
+        stage3.append(AvgPool2d(kernel_size=2, stride=2))
+        stage3.append(DetectorBlock(num_secondary_channels, num_tertiary_channels))
+
+        stage3.extend(
             [
                 DetectorBlock(num_tertiary_channels, num_tertiary_channels)
                 for _ in range(num_tertiary_layers - 1)
             ]
         )
 
-        body.append(AvgPool2d(kernel_size=2, stride=2))
-        body.append(DetectorBlock(num_tertiary_channels, num_quaternary_channels))
+        stage4 = Sequential()
 
-        body.extend(
+        stage4.append(AvgPool2d(kernel_size=2, stride=2))
+        stage4.append(DetectorBlock(num_tertiary_channels, num_quaternary_channels))
+
+        stage4.extend(
             [
                 DetectorBlock(num_quaternary_channels, num_quaternary_channels)
                 for _ in range(num_quaternary_layers - 1)
             ]
         )
 
-        self.body = body
+        self.stage1 = stage1
+        self.stage2 = stage2
+        self.stage3 = stage3
+        self.stage4 = stage4
 
     def forward(self, x: Tensor) -> Tensor:
         z = self.stem.forward(x)
-        z = self.body.forward(z)
+        
+        z = self.stage1.forward(z)
+        z = self.stage2.forward(z)
+        z = self.stage3.forward(z)
+        z = self.stage4.forward(z)
 
         return z
 
