@@ -57,15 +57,20 @@ def main():
     parser.add_argument("--contrast_jitter", default=0.1, type=float)
     parser.add_argument("--saturation_jitter", default=0.1, type=float)
     parser.add_argument("--hue_jitter", default=0.1, type=float)
-    parser.add_argument("--batch_size", default=2, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=32, type=int)
+    parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=8, type=int)
     parser.add_argument("--num_epochs", default=100, type=int)
-    parser.add_argument("--critic_warmup_epochs", default=3, type=int)
+    parser.add_argument("--critic_warmup_epochs", default=1, type=int)
     parser.add_argument("--learning_rate", default=5e-4, type=float)
     parser.add_argument("--max_gradient_norm", default=2.0, type=float)
-    parser.add_argument("--num_channels", default=96, type=int)
-    parser.add_argument("--hidden_ratio", default=2, choices={1, 2, 4}, type=int)
+    parser.add_argument("--num_channels", default=48, type=int)
+    parser.add_argument(
+        "--hidden_ratio", default=2, choices=SuperCool.AVAILABLE_HIDDEN_RATIOS, type=int
+    )
     parser.add_argument("--num_encoder_layers", default=20, type=int)
+    parser.add_argument(
+        "--critic_model_size", default="small", choices=Bouncer.AVAILABLE_MODEL_SIZES
+    )
     parser.add_argument("--eval_interval", default=2, type=int)
     parser.add_argument("--checkpoint_interval", default=2, type=int)
     parser.add_argument(
@@ -172,7 +177,9 @@ def main():
     print("Compiling upscaler model")
     upscaler = torch.compile(upscaler)
 
-    critic_args = {}
+    critic_args = {
+        "model_size": args.critic_model_size,
+    }
 
     critic = Bouncer(**critic_args)
 

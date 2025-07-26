@@ -12,7 +12,7 @@ from torch.nn import (
     Linear,
     Sigmoid,
     SiLU,
-    LayerNorm,
+    InstanceNorm2d,
     AvgPool2d,
     AdaptiveAvgPool2d,
     PixelShuffle,
@@ -246,27 +246,61 @@ class SubpixelConv2d(Module):
 
 
 class Bouncer(Module):
-    """A discriminator network for adversarial training."""
+    """A critic network for detecting real and fake images for adversarial training."""
 
-    def __init__(self):
+    AVAILABLE_MODEL_SIZES = {"small", "medium", "large"}
+
+    def __init__(self, model_size: str):
         super().__init__()
 
+        assert model_size in self.AVAILABLE_MODEL_SIZES, "Invalid model size."
+
+        num_primary_layers = 3
+        num_quaternary_layers = 3
+
+        match model_size:
+            case "small":
+                num_primary_channels = 64
+                num_secondary_channels = 128
+                num_secondary_layers = 3
+                num_tertiary_channels = 256
+                num_tertiary_layers = 6
+                num_quaternary_channels = 512
+
+            case "medium":
+                num_primary_channels = 96
+                num_secondary_channels = 192
+                num_secondary_layers = 3
+                num_tertiary_channels = 384
+                num_tertiary_layers = 12
+                num_quaternary_channels = 768
+
+            case "large":
+                num_primary_channels = 128
+                num_secondary_channels = 256
+                num_secondary_layers = 6
+                num_tertiary_channels = 512
+                num_tertiary_layers = 24
+                num_quaternary_channels = 1024
+
         self.detector = Detector(
-            num_primary_channels=64,
-            num_primary_layers=3,
-            num_secondary_channels=128,
-            num_secondary_layers=3,
-            num_tertiary_channels=256,
-            num_tertiary_layers=6,
-            num_quaternary_channels=512,
-            num_quaternary_layers=3,
+            num_primary_channels=num_primary_channels,
+            num_primary_layers=num_primary_layers,
+            num_secondary_channels=num_secondary_channels,
+            num_secondary_layers=num_secondary_layers,
+            num_tertiary_channels=num_tertiary_channels,
+            num_tertiary_layers=num_tertiary_layers,
+            num_quaternary_channels=num_quaternary_channels,
+            num_quaternary_layers=num_quaternary_layers,
         )
+
+        self.norm = InstanceNorm2d(num_quaternary_channels)
 
         self.pool = AdaptiveAvgPool2d(1)
 
         self.flatten = Flatten(start_dim=1)
 
-        self.classifier = BinaryClassifier(512)
+        self.classifier = BinaryClassifier(num_quaternary_channels)
 
     @property
     def num_trainable_params(self) -> int:
@@ -275,6 +309,7 @@ class Bouncer(Module):
     def forward(self, x: Tensor) -> Tensor:
         z = self.detector.forward(x)
 
+        z = self.norm.forward(z)
         z = self.pool.forward(z)
         z = self.flatten.forward(z)
 
@@ -317,27 +352,39 @@ class Detector(Module):
         body = Sequential()
 
         body.extend(
-            [DetectorBlock(num_primary_channels) for _ in range(num_primary_layers)]
+            [
+                DetectorBlock(num_primary_channels, num_primary_channels)
+                for _ in range(num_primary_layers)
+            ]
         )
 
         body.append(AvgPool2d(kernel_size=2, stride=2))
-
-        body.extend(
-            [DetectorBlock(num_secondary_channels) for _ in range(num_secondary_layers)]
-        )
-
-        body.append(AvgPool2d(kernel_size=2, stride=2))
-
-        body.extend(
-            [DetectorBlock(num_tertiary_channels) for _ in range(num_tertiary_layers)]
-        )
-
-        body.append(AvgPool2d(kernel_size=2, stride=2))
+        body.append(DetectorBlock(num_primary_channels, num_secondary_channels))
 
         body.extend(
             [
-                DetectorBlock(num_quaternary_channels)
-                for _ in range(num_quaternary_layers)
+                DetectorBlock(num_secondary_channels, num_secondary_channels)
+                for _ in range(num_secondary_layers - 1)
+            ]
+        )
+
+        body.append(AvgPool2d(kernel_size=2, stride=2))
+        body.append(DetectorBlock(num_secondary_channels, num_tertiary_channels))
+
+        body.extend(
+            [
+                DetectorBlock(num_tertiary_channels, num_tertiary_channels)
+                for _ in range(num_tertiary_layers - 1)
+            ]
+        )
+
+        body.append(AvgPool2d(kernel_size=2, stride=2))
+        body.append(DetectorBlock(num_tertiary_channels, num_quaternary_channels))
+
+        body.extend(
+            [
+                DetectorBlock(num_quaternary_channels, num_quaternary_channels)
+                for _ in range(num_quaternary_layers - 1)
             ]
         )
 
@@ -353,26 +400,27 @@ class Detector(Module):
 class DetectorBlock(Module):
     """A detector block with depth-wise separable convolution and residual connection."""
 
-    def __init__(self, num_channels: int):
+    def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
 
-        assert num_channels > 0, "Number of channels must be greater than 0."
+        assert in_channels > 0, "Number of channels must be greater than 0."
+        assert out_channels > 0, "Number of output channels must be greater than 0."
 
-        hidden_channels = 4 * num_channels
+        hidden_channels = 4 * out_channels
 
         self.conv1 = Conv2d(
-            num_channels,
-            num_channels,
+            in_channels,
+            out_channels,
             kernel_size=7,
             padding=3,
-            num_groups=num_channels,
+            groups=out_channels,
             bias=False,
         )
 
-        self.conv2 = Conv2d(num_channels, hidden_channels, kernel_size=1)
-        self.conv3 = Conv2d(hidden_channels, num_channels, kernel_size=1)
+        self.conv2 = Conv2d(out_channels, hidden_channels, kernel_size=1)
+        self.conv3 = Conv2d(hidden_channels, out_channels, kernel_size=1)
 
-        self.norm = LayerNorm(num_channels)
+        self.norm = InstanceNorm2d(in_channels)
 
         self.silu = SiLU()
 
@@ -389,7 +437,7 @@ class DetectorBlock(Module):
 
 
 class BinaryClassifier(Module):
-    """A simple binary classifier for real and fake images."""
+    """A simple 3-layer MLP classification head for real and fake images."""
 
     def __init__(self, input_features: int):
         super().__init__()
@@ -403,12 +451,9 @@ class BinaryClassifier(Module):
         self.linear2 = Linear(layer2_hidden_features, layer3_hidden_features)
         self.linear3 = Linear(layer3_hidden_features, 1)
 
-        self.norm = LayerNorm(input_features)
-
         self.silu = SiLU()
 
     def forward(self, x: Tensor) -> Tensor:
-        z = self.norm(x)
         z = self.linear1(z)
         z = self.silu(z)
         z = self.linear2(z)
