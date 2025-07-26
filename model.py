@@ -317,27 +317,39 @@ class Detector(Module):
         body = Sequential()
 
         body.extend(
-            [DetectorBlock(num_primary_channels) for _ in range(num_primary_layers)]
+            [
+                DetectorBlock(num_primary_channels, num_primary_channels)
+                for _ in range(num_primary_layers)
+            ]
         )
 
         body.append(AvgPool2d(kernel_size=2, stride=2))
-
-        body.extend(
-            [DetectorBlock(num_secondary_channels) for _ in range(num_secondary_layers)]
-        )
-
-        body.append(AvgPool2d(kernel_size=2, stride=2))
-
-        body.extend(
-            [DetectorBlock(num_tertiary_channels) for _ in range(num_tertiary_layers)]
-        )
-
-        body.append(AvgPool2d(kernel_size=2, stride=2))
+        body.append(DetectorBlock(num_primary_channels, num_secondary_channels))
 
         body.extend(
             [
-                DetectorBlock(num_quaternary_channels)
-                for _ in range(num_quaternary_layers)
+                DetectorBlock(num_secondary_channels, num_secondary_channels)
+                for _ in range(num_secondary_layers - 1)
+            ]
+        )
+
+        body.append(AvgPool2d(kernel_size=2, stride=2))
+        body.append(DetectorBlock(num_secondary_channels, num_tertiary_channels))
+
+        body.extend(
+            [
+                DetectorBlock(num_tertiary_channels, num_tertiary_channels)
+                for _ in range(num_tertiary_layers - 1)
+            ]
+        )
+
+        body.append(AvgPool2d(kernel_size=2, stride=2))
+        body.append(DetectorBlock(num_tertiary_channels, num_quaternary_channels))
+
+        body.extend(
+            [
+                DetectorBlock(num_quaternary_channels, num_quaternary_channels)
+                for _ in range(num_quaternary_layers - 1)
             ]
         )
 
@@ -353,26 +365,27 @@ class Detector(Module):
 class DetectorBlock(Module):
     """A detector block with depth-wise separable convolution and residual connection."""
 
-    def __init__(self, num_channels: int):
+    def __init__(self, channels_in: int, channels_out: int):
         super().__init__()
 
-        assert num_channels > 0, "Number of channels must be greater than 0."
+        assert channels_in > 0, "Number of input channels must be greater than 0."
+        assert channels_out > 0, "Number of output channels must be greater than 0."
 
-        hidden_channels = 4 * num_channels
+        hidden_channels = 4 * channels_in
 
         self.conv1 = Conv2d(
-            num_channels,
-            num_channels,
+            channels_in,
+            channels_out,
             kernel_size=7,
             padding=3,
-            num_groups=num_channels,
+            num_groups=channels_out,
             bias=False,
         )
 
-        self.conv2 = Conv2d(num_channels, hidden_channels, kernel_size=1)
-        self.conv3 = Conv2d(hidden_channels, num_channels, kernel_size=1)
+        self.conv2 = Conv2d(channels_in, hidden_channels, kernel_size=1)
+        self.conv3 = Conv2d(hidden_channels, channels_out, kernel_size=1)
 
-        self.norm = LayerNorm(num_channels)
+        self.norm = LayerNorm(channels_in)
 
         self.silu = SiLU()
 
